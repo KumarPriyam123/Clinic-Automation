@@ -90,6 +90,8 @@ class Entry:
     gap_offered_at: datetime | None = None
     next_up: bool = False
     last_notified_eta: datetime | None = None
+    notified_pre_arrival_at: datetime | None = None
+    notified_three_away_at: datetime | None = None
 
     def order_key(self) -> tuple[int, datetime, datetime]:
         """Sort key for the queue: next_up first, then priority_time, then FIFO."""

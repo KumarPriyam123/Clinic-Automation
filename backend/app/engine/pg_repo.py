@@ -50,6 +50,8 @@ def _entry(row: asyncpg.Record) -> Entry:
         gap_offered_at=row["gap_offered_at"],
         next_up=row["next_up"],
         last_notified_eta=row["last_notified_eta"],
+        notified_pre_arrival_at=row["notified_pre_arrival_at"],
+        notified_three_away_at=row["notified_three_away_at"],
     )
 
 
@@ -142,8 +144,8 @@ class PgRepo:
               (id, session_id, clinic_id, patient_id, token_number, priority_time,
                booked_at, status, source, eta, report_time, arrived_at, called_at,
                consult_start, done_at, grace_until, skip_count, gap_offered_at,
-               next_up, last_notified_eta)
-            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+               next_up, last_notified_eta, notified_pre_arrival_at, notified_three_away_at)
+            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
             """,
             e.id,
             e.session_id,
@@ -165,6 +167,8 @@ class PgRepo:
             e.gap_offered_at,
             e.next_up,
             e.last_notified_eta,
+            e.notified_pre_arrival_at,
+            e.notified_three_away_at,
         )
 
     async def save_entry(self, e: Entry) -> None:
@@ -173,7 +177,8 @@ class PgRepo:
             update queue_entries set
               priority_time=$2, status=$3, source=$4, eta=$5, report_time=$6, arrived_at=$7,
               called_at=$8, consult_start=$9, done_at=$10, grace_until=$11, skip_count=$12,
-              gap_offered_at=$13, next_up=$14, last_notified_eta=$15
+              gap_offered_at=$13, next_up=$14, last_notified_eta=$15,
+              notified_pre_arrival_at=$16, notified_three_away_at=$17
             where id=$1
             """,
             e.id,
@@ -191,6 +196,8 @@ class PgRepo:
             e.gap_offered_at,
             e.next_up,
             e.last_notified_eta,
+            e.notified_pre_arrival_at,
+            e.notified_three_away_at,
         )
 
     async def save_session(self, s: SessionState) -> None:
