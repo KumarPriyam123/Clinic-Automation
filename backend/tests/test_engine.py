@@ -17,8 +17,6 @@ from app.engine.repo import MemRepo
 from app.engine.state import Entry, Patient, SessionState
 from app.models import SessionStatus, Source, Status
 
-UTC = UTC
-
 
 def dt(h: int, m: int = 0, s: int = 0) -> datetime:
     return datetime(2026, 7, 3, h, m, s, tzinfo=UTC)
