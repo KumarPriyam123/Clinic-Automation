@@ -235,6 +235,30 @@ async def arrived_during_grace(repo: Repo, now: datetime, entry_id: UUID) -> Eng
     return result
 
 
+async def call_now(repo: Repo, now: datetime, entry_id: UUID) -> EngineResult:
+    """Receptionist override: make this present patient head-of-line so the very
+    next NEXT serves them. Marks a BOOKED entry ARRIVED, sets ``next_up`` and
+    ``priority_time = now-1s`` (rule 1's max still blocks leapfrogging a *target*
+    time, but next_up wins the order_key). Does not itself start the consult —
+    NEXT does — so the doctor-never-idle skip guard stays intact."""
+    entry = await repo.get_entry(entry_id)
+    session = await repo.lock_session(entry.session_id)
+    if entry.status in (Status.done, Status.cancelled, Status.expired, Status.in_consult):
+        raise InvalidTransition(f"cannot call from {entry.status}")
+    if entry.status in (Status.booked, Status.skipped):
+        entry.arrived_at = entry.arrived_at or now
+    entry.status = Status.arrived
+    entry.priority_time = now - timedelta(seconds=1)
+    entry.next_up = True
+    await repo.save_entry(entry)
+    await repo.add_event(session.clinic_id, session.id, entry.id, "arrived", {"call_now": True})
+
+    result = EngineResult(entry=entry)
+    result.touched(entry)
+    await _recompute_and_shift(repo, session, await repo.list_entries(session.id), now, result)
+    return result
+
+
 # --------------------------------------------------------------------------- #
 # serving — rule 3
 # --------------------------------------------------------------------------- #

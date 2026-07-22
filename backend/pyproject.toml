@@ -38,6 +38,16 @@ select = ["E", "F", "I", "UP", "B"]
 # str+Enum is deliberate (clean JSON/DB serialization on py3.11); not StrEnum.
 ignore = ["UP042"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency markers are the framework idiom, not mutable-default bugs.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+]
+
 [tool.black]
 line-length = 100
 target-version = ["py311"]

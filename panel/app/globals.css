@@ -3,9 +3,56 @@
 @tailwind utilities;
 
 :root {
-  --background: #fafafa; /* soft near-white */
+  --background: #f4f6f5;
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
   background: var(--background);
+  color: #16302c;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+  font-feature-settings: "tnum" 1; /* tabular numerals — token numbers align */
+}
+
+/* Respect the phone notch / gesture bar for the fixed NEXT button. */
+.safe-bottom {
+  padding-bottom: max(0px, env(safe-area-inset-bottom));
+}
+.pb-safe-next {
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+}
+
+@layer components {
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold leading-none;
+  }
+  .btn {
+    @apply inline-flex min-h-touch items-center justify-center gap-2 rounded-2xl px-5 text-lg font-semibold transition active:scale-[0.98];
+  }
+  .btn-primary {
+    @apply btn bg-primary text-white shadow-card active:bg-primary-dark;
+  }
+  .btn-ghost {
+    @apply btn border border-line bg-surface text-ink active:bg-canvas;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white active:opacity-90;
+  }
+  .field {
+    @apply w-full rounded-2xl border border-line bg-surface px-4 text-xl text-ink outline-none placeholder:text-faint focus:border-primary focus:ring-4 focus:ring-primary/15;
+  }
+}
+
+/* Hide scrollbars on the session-switcher rail but keep it swipeable. */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

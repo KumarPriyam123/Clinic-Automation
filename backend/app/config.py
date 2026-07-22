@@ -35,5 +35,8 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "dev-secret-change-me"
     ENV: str = "dev"
 
+    # Panel (Next.js) origins allowed to call the API (CORS). Comma-separated in env.
+    PANEL_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
 
 settings = Settings()

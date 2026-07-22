@@ -11,8 +11,11 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import db
+from app.api.panel import build_router as build_panel_router
+from app.config import settings
 from app.convo.flow import Flow
 from app.convo.llm import parse as llm_parse
 from app.convo.store import PgConvo
@@ -51,11 +54,21 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="ClinicQ", version="0.1.0", lifespan=lifespan)
 
+    # Panel is a separate origin (Next.js dev / PWA). Allow it to call the API.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.PANEL_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:
         return {"ok": True}
 
     app.include_router(build_wa_router(PoolWaStore()))
+    app.include_router(build_panel_router())
 
     return app
 

@@ -16,3 +16,6 @@ next-env.d.ts
 
 # OS / editor
 .DS_Store
+
+# TS incremental build info
+*.tsbuildinfo
