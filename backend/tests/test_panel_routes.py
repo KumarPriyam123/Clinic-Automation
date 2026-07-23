@@ -133,8 +133,12 @@ def test_every_mutating_route_smoke():
                 assert "clinic" in st.json() and "timetable" in st.json()
                 assert st.json()["clinic"]["name"] == "Demo Clinic 2"
 
-                # --- close / cancel today ---
+                # --- close / reopen / cancel today ---
                 _check(await c.post("/panel/session/close", json={"session_id": sid}, headers=h))
+                reopened = _check(
+                    await c.post("/panel/session/reopen", json={"session_id": sid}, headers=h)
+                )
+                assert reopened.session is not None and reopened.session.status == "open"
                 _check(
                     await c.post("/panel/session/cancel-today", json={"session_id": sid}, headers=h)
                 )

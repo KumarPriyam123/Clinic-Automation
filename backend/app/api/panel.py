@@ -474,6 +474,15 @@ async def close(session_id: UUID = Body(..., embed=True), clinic: Clinic = Curre
     return await _finish(clinic.id, session_id, result, snap)
 
 
+@router.post("/session/reopen")
+async def reopen(session_id: UUID = Body(..., embed=True), clinic: Clinic = CurrentClinic) -> dict:
+    now = _now()
+    result, snap = await _mutate(
+        session_id, lambda repo: engine.reopen_session(repo, now, session_id)
+    )
+    return await _finish(clinic.id, session_id, result, snap)
+
+
 @router.post("/session/cancel-today")
 async def cancel_today(
     session_id: UUID = Body(..., embed=True), clinic: Clinic = CurrentClinic

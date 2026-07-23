@@ -21,6 +21,7 @@ from app.engine.api import (
     open_session,
     pause_session,
     recompute_etas_public,
+    reopen_session,
     resume_session,
     sweep,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "open_session",
     "pause_session",
     "recompute_etas_public",
+    "reopen_session",
     "resume_session",
     "sweep",
     "DuplicateActiveToken",

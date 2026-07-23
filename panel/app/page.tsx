@@ -176,6 +176,7 @@ export default function LiveQueue() {
         <SessionControls
           open={controlsOpen}
           session={session}
+          nowServing={q.snap?.now_serving ?? null}
           onClose={() => setControlsOpen(false)}
           onStart={() => sid && q.run(() => api.startSession(sid))}
           onPause={() => sid && q.run(() => api.pauseSession(sid))}
@@ -184,6 +185,7 @@ export default function LiveQueue() {
           onEmergency={() => openWalkin(true)}
           onCloseToday={() => sid && q.run(() => api.closeSession(sid))}
           onCancelToday={() => sid && q.run(() => api.cancelToday(sid))}
+          onReopen={() => sid && q.run(() => api.reopenSession(sid))}
         />
       )}
     </main>

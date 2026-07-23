@@ -51,6 +51,11 @@ export const STRINGS = {
   emergency: { hi: "इमरजेंसी", en: "Emergency" },
   closeToday: { hi: "आज बंद करें", en: "Close today" },
   cancelToday: { hi: "आज रद्द करें", en: "Cancel today" },
+  reopen: { hi: "फिर से खोलें", en: "Reopen" },
+  closeConfirmYes: { hi: "हाँ, बंद करें", en: "Yes, close" },
+  cancelConfirmYes: { hi: "हाँ, आज रद्द करें", en: "Yes, cancel today" },
+  reopenConfirmYes: { hi: "हाँ, फिर से खोलें", en: "Yes, reopen" },
+  back: { hi: "वापस", en: "Back" },
   settings: { hi: "सेटिंग", en: "Settings" },
 
   undo: { hi: "वापस लें", en: "Undo" },

@@ -126,6 +126,8 @@ export const resumeSession = (sessionId: string) =>
   request<QueueSnapshot>("/session/resume", { method: "POST", body: body({ session_id: sessionId }) });
 export const closeSession = (sessionId: string) =>
   request<QueueSnapshot>("/session/close", { method: "POST", body: body({ session_id: sessionId }) });
+export const reopenSession = (sessionId: string) =>
+  request<QueueSnapshot>("/session/reopen", { method: "POST", body: body({ session_id: sessionId }) });
 export const cancelToday = (sessionId: string) =>
   request<QueueSnapshot>("/session/cancel-today", {
     method: "POST",

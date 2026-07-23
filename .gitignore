@@ -19,3 +19,6 @@ next-env.d.ts
 
 # TS incremental build info
 *.tsbuildinfo
+
+# Next local env
+.env*.local

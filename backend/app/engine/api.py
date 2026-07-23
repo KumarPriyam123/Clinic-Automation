@@ -57,6 +57,41 @@ def _ordered_waiting(entries: list[Entry]) -> list[Entry]:
     return sorted((e for e in entries if e.status in WAITING_STATUSES), key=Entry.order_key)
 
 
+async def _finalize_in_consult(
+    repo: Repo,
+    session: SessionState,
+    entries: list[Entry],
+    now: datetime,
+    result: EngineResult,
+    *,
+    via_close: bool = False,
+) -> None:
+    """Finish any IN_CONSULT entry -> DONE: record duration, learn avg_consult_s
+    (same rolling formula everywhere), bump consults_done, free the doctor.
+
+    Shared by NEXT and the close/cancel paths — a patient in the room WAS seen,
+    so the learning and the day's counts must not depend on which action ended
+    the consult. The finalized patient gets no notification (nothing to tell
+    someone who was being served). ``via_close`` only tags the audit event.
+    """
+    for e in entries:
+        if e.status != Status.in_consult:
+            continue
+        actual = (
+            (now - e.consult_start).total_seconds() if e.consult_start else session.avg_consult_s
+        )
+        e.status = Status.done
+        e.done_at = now
+        session.avg_consult_s = round(0.7 * session.avg_consult_s + 0.3 * actual)
+        session.consults_done += 1
+        session.doctor_free_at = now
+        await repo.save_entry(e)
+        await repo.save_session(session)
+        payload = {"via": "session_close"} if via_close else None
+        await repo.add_event(session.clinic_id, session.id, e.id, "done", payload)
+        result.touched(e)
+
+
 # --------------------------------------------------------------------------- #
 # session lifecycle
 # --------------------------------------------------------------------------- #
@@ -90,11 +125,15 @@ async def resume_session(repo: Repo, now: datetime, session_id: UUID) -> EngineR
 
 
 async def close_session(repo: Repo, now: datetime, session_id: UUID) -> EngineResult:
-    """Close a session: any still-pending token EXPIRES (absent ones take a
-    strike + rebook nudge). avg_consult_s is already persisted from DONEs."""
+    """Close a session: finalize whoever is in the room (IN_CONSULT -> DONE, they
+    were seen), then any still-pending token EXPIRES (absent ones take a strike +
+    rebook nudge)."""
     session = await repo.lock_session(session_id)
     entries = await repo.list_entries(session_id)
     result = EngineResult()
+
+    # the last patient is usually still in the room at end-of-day: count them
+    await _finalize_in_consult(repo, session, entries, now, result, via_close=True)
 
     for e in entries:
         if e.status in (Status.booked, Status.arrived, Status.called, Status.skipped):
@@ -111,6 +150,23 @@ async def close_session(repo: Repo, now: datetime, session_id: UUID) -> EngineRe
     session.status = SessionStatus.closed
     await repo.save_session(session)
     await repo.add_event(session.clinic_id, session.id, None, "session_closed")
+    return result
+
+
+async def reopen_session(repo: Repo, now: datetime, session_id: UUID) -> EngineResult:
+    """Recover from a mis-tapped close: status closed -> open, doctor clock reset.
+
+    Deliberately does NOT touch entries. Expired/cancelled patients have already
+    been sent "book tomorrow" / "clinic closed" messages — resurrecting them
+    would summon people who were told not to come. Reopening only restores the
+    ability to work the queue again (walk-ins, new bookings, NEXT)."""
+    session = await repo.lock_session(session_id)
+    session.status = SessionStatus.open
+    session.doctor_free_at = now
+    await repo.save_session(session)
+    await repo.add_event(session.clinic_id, session.id, None, "session_reopened")
+    result = EngineResult()
+    await _recompute_and_shift(repo, session, await repo.list_entries(session_id), now, result)
     return result
 
 
@@ -268,22 +324,7 @@ async def next_patient(repo: Repo, now: datetime, session_id: UUID) -> EngineRes
     result = EngineResult()
 
     # 1. finish whoever is in consult -> DONE, learn avg, free the doctor
-    for e in entries:
-        if e.status == Status.in_consult:
-            actual = (
-                (now - e.consult_start).total_seconds()
-                if e.consult_start
-                else session.avg_consult_s
-            )
-            e.status = Status.done
-            e.done_at = now
-            session.avg_consult_s = round(0.7 * session.avg_consult_s + 0.3 * actual)
-            session.consults_done += 1
-            session.doctor_free_at = now
-            await repo.save_entry(e)
-            await repo.save_session(session)
-            await repo.add_event(session.clinic_id, session.id, e.id, "done")
-            result.touched(e)
+    await _finalize_in_consult(repo, session, entries, now, result)
 
     # 2. skip guard: only skip when an ARRIVED replacement exists; else hold
     ordered = _ordered_waiting(entries)
@@ -370,6 +411,8 @@ async def cancel_session_today(repo: Repo, now: datetime, session_id: UUID) -> E
     session = await repo.lock_session(session_id)
     entries = await repo.list_entries(session_id)
     result = EngineResult()
+    # a patient already inside WAS seen — record them done, don't cancel them
+    await _finalize_in_consult(repo, session, entries, now, result, via_close=True)
     for e in entries:
         if e.status in ACTIVE_STATUSES:
             e.status = Status.cancelled
