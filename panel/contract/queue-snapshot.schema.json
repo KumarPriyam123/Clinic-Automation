@@ -1,0 +1,336 @@
+{
+  "$defs": {
+    "NowServingOut": {
+      "additionalProperties": false,
+      "properties": {
+        "consult_start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Consult Start"
+        },
+        "entry_id": {
+          "title": "Entry Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "token_number": {
+          "title": "Token Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entry_id",
+        "token_number",
+        "name",
+        "consult_start"
+      ],
+      "title": "NowServingOut",
+      "type": "object"
+    },
+    "QueueEntryOut": {
+      "additionalProperties": false,
+      "properties": {
+        "arrived_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Arrived At"
+        },
+        "entry_id": {
+          "title": "Entry Id",
+          "type": "string"
+        },
+        "eta": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Eta"
+        },
+        "grace_until": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Grace Until"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "next_up": {
+          "title": "Next Up",
+          "type": "boolean"
+        },
+        "priority_time": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Priority Time"
+        },
+        "report_time": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Report Time"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "token_number": {
+          "title": "Token Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entry_id",
+        "token_number",
+        "name",
+        "status",
+        "source",
+        "priority_time",
+        "eta",
+        "report_time",
+        "arrived_at",
+        "grace_until",
+        "next_up"
+      ],
+      "title": "QueueEntryOut",
+      "type": "object"
+    },
+    "SessionListItemOut": {
+      "additionalProperties": false,
+      "properties": {
+        "end_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "End At"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "start_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Start At"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "start_at",
+        "end_at"
+      ],
+      "title": "SessionListItemOut",
+      "type": "object"
+    },
+    "SessionMetaOut": {
+      "additionalProperties": false,
+      "properties": {
+        "avg_consult_s": {
+          "title": "Avg Consult S",
+          "type": "integer"
+        },
+        "date": {
+          "title": "Date",
+          "type": "string"
+        },
+        "doctor_free_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Doctor Free At"
+        },
+        "end_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "End At"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "served": {
+          "title": "Served",
+          "type": "integer"
+        },
+        "start_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Start At"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "token_cap": {
+          "title": "Token Cap",
+          "type": "integer"
+        },
+        "waiting": {
+          "title": "Waiting",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "date",
+        "start_at",
+        "end_at",
+        "token_cap",
+        "avg_consult_s",
+        "doctor_free_at",
+        "served",
+        "waiting"
+      ],
+      "title": "SessionMetaOut",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "can_undo": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Can Undo"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/QueueEntryOut"
+      },
+      "title": "Entries",
+      "type": "array"
+    },
+    "now_serving": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NowServingOut"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "session": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SessionMetaOut"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sessions": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/SessionListItemOut"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sessions"
+    }
+  },
+  "required": [
+    "session",
+    "now_serving",
+    "entries"
+  ],
+  "title": "QueueSnapshot",
+  "type": "object"
+}
