@@ -52,9 +52,22 @@ export function SessionControls({
   const st = session.status;
   const waiting = session.waiting;
   const served = session.served;
-  // reopen is a same-day recovery only (a closed session from today)
+  // reopen is a same-day recovery from closed OR cancelled (mis-tap recovery)
   const todayIST = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-  const canReopen = st === "closed" && session.date === todayIST;
+  const canReopen = (st === "closed" || st === "cancelled") && session.date === todayIST;
+
+  async function reloadApp() {
+    onClose();
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+    window.location.reload();
+  }
 
   // --- dynamic, count-aware confirm bodies (staff-facing panel copy) --- //
   const closeLines: Line[] = [];
@@ -103,7 +116,7 @@ export function SessionControls({
 
   return (
     <Sheet open={open} onClose={close} title={STRINGS.controls.hi}>
-      {/* A closed/cancelled session shows recovery (reopen only for today's close). */}
+      {/* A closed/cancelled session shows recovery (reopen only for today's close/cancel). */}
       {st === "closed" || st === "cancelled" ? (
         confirm === "reopen" ? (
           <ConfirmPanel
@@ -188,6 +201,15 @@ export function SessionControls({
             onClick={() => setConfirm("cancel")}
           >
             ✕ {STRINGS.cancelToday.hi}
+          </button>
+
+          {/* Reload — unregisters SW, clears caches, hard-reloads.
+              First thing to try if the screen looks wrong (see ONBOARDING.md). */}
+          <button
+            className="mt-1 h-touch w-full rounded-xl border-0 text-sm text-faint active:bg-canvas"
+            onClick={reloadApp}
+          >
+            ↺ {STRINGS.reload.hi} / {STRINGS.reload.en}
           </button>
         </div>
       )}

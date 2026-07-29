@@ -1,6 +1,7 @@
 "use client";
 
 import { STRINGS } from "../lib/i18n";
+import { STALE_MS } from "../lib/useQueue";
 
 /** 5-second UNDO snackbar shown after every mutation (backend /undo replays the
  * inverse). Sits just above the NEXT button, one big tap target. */
@@ -36,7 +37,59 @@ export function ErrorToast({ message, onClose }: { message: string | null; onClo
   );
 }
 
-/** Fixed top bar shown while the panel can't reach the server. */
+/** Sticky banner shown while offline.
+ *
+ * - If snapshotAgeMs < STALE_MS: amber banner with "N min ago" — data visible but
+ *   all mutating controls are already disabled via `locked` in the parent.
+ * - If snapshotAgeMs >= STALE_MS: the parent hides the queue entirely and shows
+ *   StaleErrorScreen instead; this banner is hidden.
+ *
+ * `lastLiveAt` null means we've never had a successful poll (first load offline).
+ */
+export function OfflineBanner({
+  offline,
+  lastLiveAt,
+  now,
+}: {
+  offline: boolean;
+  lastLiveAt: number | null;
+  now: number;
+}) {
+  if (!offline) return null;
+  if (lastLiveAt === null) {
+    // No data at all — StaleErrorScreen handles this
+    return null;
+  }
+  const ageMs = now - lastLiveAt;
+  if (ageMs >= STALE_MS) return null; // parent shows error screen instead
+  const ageMin = Math.max(1, Math.round(ageMs / 60000));
+  return (
+    <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-100 py-2 text-sm font-bold text-amber-900">
+      <span className="h-2 w-2 animate-pulse rounded-full bg-amber-600" />
+      {STRINGS.staleData.hi} · {ageMin} {STRINGS.minutesAgo.hi} /{" "}
+      {STRINGS.staleData.en} {ageMin} {STRINGS.minutesAgo.en}
+    </div>
+  );
+}
+
+/** Full-screen error shown when offline > 10 min — hides all queue data.
+ * A receptionist must never act on data older than 10 minutes. */
+export function StaleErrorScreen({ onReload }: { onReload: () => void }) {
+  return (
+    <div className="mt-16 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
+      <p className="text-2xl">⚡</p>
+      <p className="mt-3 text-lg font-bold text-danger">{STRINGS.noConnection.hi}</p>
+      <p className="mt-1 text-sm text-muted">{STRINGS.noConnectionHint.hi}</p>
+      <p className="mt-0.5 text-xs text-faint">{STRINGS.noConnectionHint.en}</p>
+      <button onClick={onReload} className="btn-primary mt-6 w-full">
+        ↺ {STRINGS.reload.hi} / {STRINGS.reload.en}
+      </button>
+    </div>
+  );
+}
+
+/** Fixed top bar shown while the panel can't reach the server (legacy — kept for
+ * the first-load-offline case before any snapshot exists). */
 export function ReconnectBar({ visible }: { visible: boolean }) {
   if (!visible) return null;
   return (

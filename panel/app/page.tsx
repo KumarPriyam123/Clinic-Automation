@@ -16,7 +16,8 @@ import { NextButton } from "./components/NextButton";
 import { ActionSheet } from "./components/ActionSheet";
 import { WalkinModal } from "./components/WalkinModal";
 import { SessionControls } from "./components/SessionControls";
-import { ErrorToast, ReconnectBar, UndoSnackbar } from "./components/Snackbar";
+import { ErrorToast, OfflineBanner, ReconnectBar, StaleErrorScreen, UndoSnackbar } from "./components/Snackbar";
+import { STALE_MS } from "./lib/useQueue";
 
 export default function LiveQueue() {
   const router = useRouter();
@@ -38,7 +39,27 @@ export default function LiveQueue() {
   const session = q.snap?.session ?? null;
   const sid = session?.id ?? q.sessionId ?? null;
   const isOpen = session?.status === "open";
-  const locked = q.offline;
+
+  // Stale-data guard: if we've been offline for >10min, hide the queue entirely.
+  // A receptionist must never act on data that old.
+  const snapshotAge = q.lastLiveAt !== null ? now - q.lastLiveAt : null;
+  const isStale = q.offline && snapshotAge !== null && snapshotAge > STALE_MS;
+  // First-load offline (never had a response): show reconnect bar, not stale banner.
+  const isFirstLoadOffline = q.offline && q.lastLiveAt === null && !q.loading;
+
+  const locked = q.offline; // disables all mutating controls while offline
+
+  async function hardReload() {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+    window.location.reload();
+  }
 
   const openWalkin = (emergency: boolean) => {
     armSound();
@@ -69,7 +90,9 @@ export default function LiveQueue() {
 
   return (
     <main className="min-h-screen pb-safe-next">
-      <ReconnectBar visible={q.offline} />
+      {/* Sticky banners — only one shows at a time */}
+      <ReconnectBar visible={isFirstLoadOffline} />
+      <OfflineBanner offline={q.offline} lastLiveAt={q.lastLiveAt} now={now} />
 
       <div className="mx-auto w-full max-w-md px-3 pt-3">
         {/* top bar */}
@@ -97,7 +120,10 @@ export default function LiveQueue() {
           </div>
         </div>
 
-        {session ? (
+        {isStale ? (
+          /* Offline >10min: hide queue entirely — old data is worse than no data */
+          <StaleErrorScreen onReload={hardReload} />
+        ) : session ? (
           <div className="grid gap-3">
             <SessionBanner
               session={session}

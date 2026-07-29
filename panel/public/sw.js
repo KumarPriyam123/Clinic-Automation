@@ -7,8 +7,13 @@
  *    freshness (4s poll) and its offline fallback (last snapshot in
  *    localStorage). Caching queue responses in the SW would risk showing a stale
  *    queue as if live. So we just pass them through.
+ *
+ * IMPORTANT: bump CACHE_VERSION on every deploy so the activate handler evicts
+ * the stale shell immediately.  A stale cached bundle is indistinguishable from
+ * live data and is a silent pilot-breaking failure (see WA_ROUNDTRIP.md).
  */
-const CACHE = "clinicq-shell-v1";
+const CACHE_VERSION = "v2";
+const CACHE = `clinicq-shell-${CACHE_VERSION}`;
 const SHELL = ["/", "/login", "/settings", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (event) => {
@@ -26,13 +31,28 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+/**
+ * Returns true when this request must bypass the cache and go straight to the
+ * network.  Exported as a named function so sw.test.mjs can assert it without
+ * a real SW environment.
+ *
+ * Rules (in priority order):
+ *  1. API calls on /panel/* — NEVER cache; stale queue data is worse than no data.
+ *  2. Cross-origin requests — backend is on a different host; let it handle its own caching.
+ */
+function shouldPassToNetwork(pathname, requestHostname, swHostname) {
+  if (pathname.startsWith("/panel/")) return true;
+  if (requestHostname !== swHostname) return true;
+  return false;
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
-  // Let API traffic go straight to the network (queue handles its own offline).
-  if (url.pathname.startsWith("/panel/") || url.hostname !== self.location.hostname) return;
+  // API traffic: pass straight to network. See shouldPassToNetwork() above.
+  if (shouldPassToNetwork(url.pathname, url.hostname, self.location.hostname)) return;
 
   // Navigations: network-first so fresh HTML wins, fall back to cached shell.
   if (req.mode === "navigate") {

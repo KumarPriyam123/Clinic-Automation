@@ -70,6 +70,19 @@ export const STRINGS = {
   saved: { hi: "सेव हो गया", en: "Saved" },
   logout: { hi: "लॉगआउट", en: "Logout" },
 
+  staleData: { hi: "पुराना डेटा", en: "Offline — not live" },
+  minutesAgo: { hi: "मिनट पहले", en: "min ago" },
+  noConnection: { hi: "कनेक्शन नहीं", en: "Can't reach server" },
+  noConnectionHint: {
+    hi: "10 मिनट से ज़्यादा समय से सर्वर से संपर्क नहीं हो रहा।",
+    en: "Server unreachable for over 10 minutes.",
+  },
+  reload: { hi: "रीफ़्रेश करें", en: "Reload" },
+  reloadHint: {
+    hi: "अगर डेटा गलत दिखे — ⋯ मेनू → रीफ़्रेश करें",
+    en: "If data looks wrong — ⋯ menu → Reload",
+  },
+
   status: {
     booked: { hi: "बुक", en: "Booked" },
     arrived: { hi: "आ गए", en: "Arrived" },

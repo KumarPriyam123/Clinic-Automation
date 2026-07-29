@@ -73,10 +73,17 @@ Go live next morning.
 
 ## Rollback / if something breaks mid-session
 
+- **Screen looks wrong / showing old data:** panel → session controls (⚙ button)
+  → scroll to bottom → **↺ रीफ़्रेश करें / Reload**. This unregisters the
+  service worker, clears all caches, and hard-reloads from the server. First
+  thing to try; fixes any stale-bundle or stale-snapshot issue without losing
+  login state (stored in localStorage separately).
 - **Slow down / stop calling:** panel → session controls → **Pause** (bookings
   still queue; nobody is called until Resume).
 - **Abandon the session:** **Close today** — patients already seen are recorded;
   waiting patients get "come tomorrow." Mis-tap → **Reopen** (same day).
+- **Cancelled session recovery:** panel → session controls → **↻ फिर से खोलें**
+  (visible for today's closed or cancelled sessions). Same-day only.
 - **Total outage (panel won't load):** the clinic can run on paper for the
   session; bookings keep arriving on WhatsApp and appear once the panel is back
   (the DB is the source of truth). Call the ClinicQ contact; check

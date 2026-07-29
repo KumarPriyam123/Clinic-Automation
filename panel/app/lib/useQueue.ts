@@ -7,11 +7,29 @@ import type { QueueSnapshot } from "./types";
 
 const CACHE_KEY = "clinicq.lastQueue";
 const POLL_MS = 4000;
+export const STALE_MS = 10 * 60 * 1000; // 10 min — beyond this show error, not data
 
+/** Today's date in IST as "YYYY-MM-DD" — matches the session.date field. */
+function todayIST(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+
+/**
+ * Load the last cached snapshot, discarding it if the session's date doesn't
+ * match today in IST.  A cross-day cache is the primary cause of stale data:
+ * sessionId from yesterday's snapshot drives polls to the wrong session.
+ */
 function loadCache(): QueueSnapshot | null {
   if (typeof window === "undefined") return null;
   const raw = window.localStorage.getItem(CACHE_KEY);
-  return raw ? (JSON.parse(raw) as QueueSnapshot) : null;
+  if (!raw) return null;
+  const snap = JSON.parse(raw) as QueueSnapshot;
+  if (snap.session?.date && snap.session.date !== todayIST()) {
+    // Cross-day cache: discard so first poll calls fetchToday() for correct session.
+    window.localStorage.removeItem(CACHE_KEY);
+    return null;
+  }
+  return snap;
 }
 
 /** Count entries that represent a fresh patient landing (booking or arrival). */
@@ -29,6 +47,8 @@ export interface QueueController {
   sessionId: string | null;
   setSessionId: (id: string) => void;
   offline: boolean;
+  /** Unix ms of the last successful poll. null until first success. */
+  lastLiveAt: number | null;
   loading: boolean;
   newFlash: number; // increments when a new patient lands (for a badge pulse)
   /** Run a mutation, adopt its snapshot, and surface a 5s undo affordance. */
@@ -45,6 +65,7 @@ export function useQueue(): QueueController {
     () => loadCache()?.session?.id ?? null,
   );
   const [offline, setOffline] = useState(false);
+  const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [newFlash, setNewFlash] = useState(0);
   const [undoVisible, setUndoVisible] = useState(false);
@@ -82,6 +103,7 @@ export function useQueue(): QueueController {
       // fetchQueue drops the session list; keep the one today gave us
       if (sessionId && snap?.sessions) data.sessions = snap.sessions;
       setOffline(false);
+      setLastLiveAt(Date.now());
       adopt(data, true);
     } catch (e) {
       if (e instanceof api.ApiError && e.status === 401) return;
@@ -103,6 +125,7 @@ export function useQueue(): QueueController {
       try {
         const data = await fn();
         setOffline(false);
+        setLastLiveAt(Date.now());
         adopt(data, false);
         if (data.can_undo) {
           setUndoVisible(true);
@@ -135,6 +158,7 @@ export function useQueue(): QueueController {
     sessionId,
     setSessionId,
     offline,
+    lastLiveAt,
     loading,
     newFlash,
     run,
