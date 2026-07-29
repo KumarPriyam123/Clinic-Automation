@@ -1,0 +1,37 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "1328874952562037",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "+1 555 162-7387",
+              "phone_number_id": "1198540706681830"
+            },
+            "statuses": [
+              {
+                "id": "wamid.HBgMOTE5OTk5OTk5OTk5FQIAERgSMjAyNDA3MjcwMDAwMDAwNAA=",
+                "status": "delivered",
+                "timestamp": "1753609203",
+                "recipient_id": "919999999999",
+                "conversation": {
+                  "id": "CONV_ID_001",
+                  "origin": {"type": "utility"}
+                },
+                "pricing": {
+                  "billable": true,
+                  "pricing_model": "CBP",
+                  "category": "utility"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

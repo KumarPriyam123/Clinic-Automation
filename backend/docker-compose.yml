@@ -1,0 +1,45 @@
+# ClinicQ production compose — backend + Cloudflare Tunnel.
+# Meta requires a stable HTTPS webhook URL; the tunnel provides it without
+# opening ports on the droplet. Run: docker compose up -d
+#
+# SCHEDULER SINGLE-INSTANCE: exactly ONE backend replica, one worker. Never
+# scale this service and never add uvicorn --workers >1 (see DEPLOY.md).
+
+services:
+  backend:
+    build: .
+    image: clinicq-backend:latest
+    restart: always
+    env_file: .env
+    environment:
+      TZ: UTC
+      RUN_SCHEDULER: "true" # exactly one process may set this true
+    ports:
+      - "127.0.0.1:8000:8000" # bind localhost only; the tunnel reaches it
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m" # log rotation: 10MB x 5 = 50MB cap
+        max-file: "5"
+
+  # Named tunnel created in the Cloudflare dashboard; maps
+  # https://<subdomain> -> http://backend:8000. Provide TUNNEL_TOKEN in .env.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,35 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "1328874952562037",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "+1 555 162-7387",
+              "phone_number_id": "1198540706681830"
+            },
+            "contacts": [
+              {
+                "profile": {"name": "Test User"},
+                "wa_id": "919999999999"
+              }
+            ],
+            "messages": [
+              {
+                "from": "919999999999",
+                "id": "wamid.HBgMOTE5OTk5OTk5OTk5FQIAERgSMjAyNDA3MjcwMDAwMDAwMQA=",
+                "timestamp": "1753609200",
+                "text": {"body": "hi"},
+                "type": "text"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

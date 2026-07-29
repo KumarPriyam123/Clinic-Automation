@@ -1,0 +1,301 @@
+# WA Journey QA — full patient booking round-trip
+
+Run this on your phone against Meta's test number (+1 555 162-7387) with the
+backend live, ngrok tunnel active, and `wa_preflight.py` all green.
+
+**Replace `91XXXXXXXXXX`** with your actual number (digits Meta sends in the
+`from` field — no `+`). Check it from any of the DB queries below after the
+first message.
+
+**Backend must be in:** `cd backend && .venv/Scripts/python.exe -m uvicorn app.main:app --reload`
+
+---
+
+## Step 1 — "Hi" (first contact)
+
+**Send:** `Hi`
+
+**Expected reply:**
+```
+ℹ️ बुकिंग के लिए हम आपका नाम व नंबर सुरक्षित रखते हैं। हटाने के लिए STOP लिखें।
+
+कौन सा सत्र?
+[list: morning / evening]
+```
+Consent line appears only on the very first message ever from this number.
+
+**Backend log to see:**
+```
+INFO clinicq http method=POST path=/webhook status=200 dur_ms=...
+```
+No `sig_verify` WARNING = signature passed.
+
+**DB assertion:**
+```sql
+psql postgresql://postgres:postgres@localhost:55432/clinicq \
+  -c "SELECT state, context FROM conversations WHERE wa_number = '91XXXXXXXXXX';"
+-- expect: state=choosing_session, context={}
+```
+
+---
+
+## Step 2 — Tap a session (e.g. "morning")
+
+**Send:** Tap the `morning` list item.
+
+**Expected reply:**
+```
+कब आना चाहेंगे? 'जल्दी से जल्दी' दबाएँ या अपना समय लिखें (जैसे 7 baje)।
+[button: जल्दी से जल्दी]
+```
+
+**DB assertion:**
+```sql
+-c "SELECT state, context FROM conversations WHERE wa_number = '91XXXXXXXXXX';"
+-- expect: state=choosing_time, context contains session_id
+```
+
+---
+
+## Step 3 — Tap "जल्दी से जल्दी"
+
+**Send:** Tap the ASAP button.
+
+**Expected reply:**
+```
+किसके लिए?
+[buttons: खुद | परिवार]
+```
+
+**DB assertion:**
+```sql
+-c "SELECT state FROM conversations WHERE wa_number = '91XXXXXXXXXX';"
+-- expect: state=choosing_profile
+```
+
+---
+
+## Step 4 — Tap "खुद" → booking confirmed
+
+**Send:** Tap `खुद`.
+
+**Expected reply:**
+```
+नमस्ते  जी! अपॉइंटमेंट पक्का ✅ टोकन नं. 1 • डॉक्टर आपको लगभग H:MM बजे देखेंगे • कृपया H:MM बजे तक क्लिनिक पहुँचें।
+[buttons: 📍 मैं आ गया/गई | ❌ कैंसिल]
+```
+
+**DB assertion:**
+```sql
+-c "SELECT qe.token_number, qe.status, qe.priority_time, qe.eta, qe.report_time
+    FROM queue_entries qe
+    JOIN patients p ON p.id = qe.patient_id
+    WHERE p.wa_number = '91XXXXXXXXXX' AND qe.status = 'booked';"
+-- expect: token_number=1, status=booked, priority_time ~= now, eta set, report_time set
+```
+
+---
+
+## Step 5 — Tap "📍 मैं आ गया/गई" → ARRIVED (definition of done)
+
+**Send:** Tap the arrived button.
+
+**Expected reply:**
+```
+धन्यवाद! आपकी उपस्थिति दर्ज हो गई है।
+```
+
+**DB assertion:**
+```sql
+-c "SELECT status, arrived_at FROM queue_entries qe
+    JOIN patients p ON p.id = qe.patient_id
+    WHERE p.wa_number = '91XXXXXXXXXX';"
+-- expect: status=arrived, arrived_at IS NOT NULL
+```
+
+**This is the end-to-end proof.** Booking created → patient arrived, entirely over WhatsApp.
+
+---
+
+## Step 6 — Free-text time booking (LLM live)
+
+First cancel the existing booking (or use a second phone). Then:
+
+**Send:** `kal subah 10 baje`
+
+**Expected reply:** Session list (state resets to choosing_session because there's
+no session yet in context). Tap a session, then type the time again OR just tap ASAP.
+
+To test the LLM time parse specifically:
+
+**Send session button** → state=choosing_time.
+**Send:** `kal subah 10 baje`
+
+**Expected:** asks खुद / परिवार (time parsed, moved to choosing_profile).
+
+**Backend log to see:**
+```
+INFO clinicq http method=POST path=/webhook status=200 dur_ms=...
+```
+No LLM error in logs = Gemini responded correctly.
+
+**DB assertion (after tapping खुद):**
+```sql
+-c "SELECT priority_time AT TIME ZONE 'Asia/Kolkata' AS ist
+    FROM queue_entries qe JOIN patients p ON p.id = qe.patient_id
+    WHERE p.wa_number = '91XXXXXXXXXX' AND qe.status = 'booked';"
+-- expect: IST time = tomorrow 10:00
+```
+
+---
+
+## Step 7 — "status"
+
+With an active booking:
+
+**Send:** `status`
+
+**Expected reply:**
+```
+टोकन 1 • आपसे पहले 0 मरीज़ • अनुमानित समय H:MM
+```
+
+No LLM call. Instant keyword bypass.
+
+---
+
+## Step 8 — "cancel" → confirmed → cancelled
+
+**Send:** `cancel`
+
+**Expected reply:**
+```
+क्या आप अपनी बुकिंग रद्द करना चाहते हैं?
+[buttons: हाँ, रद्द करें | नहीं]
+```
+
+**Send:** Tap `हाँ, रद्द करें`
+
+**Expected reply:**
+```
+आपकी बुकिंग रद्द कर दी गई है।
+```
+
+**DB assertion:**
+```sql
+-c "SELECT status FROM queue_entries qe JOIN patients p ON p.id = qe.patient_id
+    WHERE p.wa_number = '91XXXXXXXXXX' ORDER BY qe.booked_at DESC LIMIT 1;"
+-- expect: status=cancelled
+```
+
+---
+
+## Step 9 — Medical question → safe template (never LLM output)
+
+**Send:** `mujhe bukhar hai kya karun`
+
+**Expected reply — EXACTLY:**
+```
+कृपया इस बारे में डॉक्टर से मिलने पर बात करें। 🙏
+```
+
+**Verify:** This is the `medical_safe` template from `wa/templates.py`. The LLM
+classified the intent as `medical_question`; the flow returned the fixed template
+string. No medical advice was generated by the LLM.
+
+**Backend log to check:** No second LLM call after the intent parse. The reply
+is dispatched immediately from the template registry.
+
+---
+
+## Step 10 — "STOP" → DPDP delete
+
+**Send:** `STOP`
+
+**Expected reply:**
+```
+आपका डेटा हटा दिया गया है और सक्रिय बुकिंग रद्द कर दी गई है। 🙏
+```
+
+**DB assertion (patient row gone):**
+```sql
+-c "SELECT count(*) FROM patients WHERE wa_number = '91XXXXXXXXXX';"
+-- expect: count=0
+
+-c "SELECT count(*) FROM conversations WHERE wa_number = '91XXXXXXXXXX';"
+-- expect: count=0
+```
+
+Any active queue_entries were cancelled before deletion (FK cascade or explicit cancel).
+
+---
+
+## Step 11 — Gibberish → re-ask, no crash
+
+After STOP, you're a new user. Send `Hi` first to re-register, tap session, tap ASAP to reach choosing_profile state. Then:
+
+**Send:** `asdfghjkl`
+
+**Expected reply (two messages):**
+```
+माफ़ करें, समझ नहीं आया। नीचे बटन से चुनें या 'menu' लिखें।
+```
+followed immediately by:
+```
+किसके लिए?
+[buttons: खुद | परिवार]
+```
+The profile buttons are re-sent. State stays at `choosing_profile` — no dead-end.
+
+---
+
+## Step 12 — "Hi" mid-flow (per Part 2 precedence)
+
+**Scenario A — no active token (mid-booking, choosing_time):**
+
+Tap session → reach choosing_time. Then send `Hi`.
+
+**Expected:** Session list (reset to idle, start over). Previous choosing_time state cleared.
+
+**Scenario B — has active token:**
+
+Complete a booking (Step 4). Then send `Hi` (don't tap arrived yet).
+
+**Expected:**
+```
+आपका टोकन 1 • आपसे पहले 0 मरीज़ • अनुमानित समय H:MM 📋 रद्द करने के लिए 'cancel' लिखें।
+```
+Active booking is preserved. Conversation state unchanged.
+
+**DB assertion (Scenario B):**
+```sql
+-c "SELECT status FROM queue_entries qe JOIN patients p ON p.id = qe.patient_id
+    WHERE p.wa_number = '91XXXXXXXXXX' AND qe.status = 'booked';"
+-- expect: still booked (not wiped)
+```
+
+---
+
+## Panel steps (required for full journey)
+
+Some steps above need the panel to advance the queue:
+
+- **NEXT button** → moves the current CALLED patient to IN_CONSULT, serves next ARRIVED.
+  Required to test CALLED/IN_CONSULT notifications and the skip/grace path.
+
+Panel URL: `http://localhost:3000` — login: slug=`demo` PIN=`123456`
+
+---
+
+## What to check in ngrok inspector
+
+URL: `http://127.0.0.1:4040`
+
+Shows every raw POST Meta sends. For each inbound user message you'll see:
+- Request headers including `X-Hub-Signature-256`
+- Raw JSON body
+- Response: `200 OK`
+
+If you see `403` in the response column → signature failure (check backend WARNING log).
+
+If you see requests but no backend log → route mismatch (confirm URL ends `/webhook`).
