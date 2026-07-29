@@ -21,6 +21,11 @@ dev = [
     "ruff>=0.5",
     "black>=24.4",
 ]
+# Pilot tooling only (scripts/qr_poster.py). Not needed to run the app.
+pilot = [
+    "qrcode>=7.4",
+    "reportlab>=4.0",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

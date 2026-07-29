@@ -282,6 +282,111 @@ def test_gibberish_low_confidence_reasks_with_buttons():
     assert "list" in kinds
 
 
+def test_greeting_bypass_llm_raises():
+    """Greeting keyword works even when llm.parse raises — no network dependency."""
+    store, sender, convo, clinic, s, parse, flow = build(lang="hi")
+
+    async def broken_parse(text, ctx):
+        raise RuntimeError("LLM unavailable")
+
+    flow.parse = broken_parse
+    run(_in(flow, store, text="hi"))
+    assert last(store)["kind"] == "list"
+    assert f"sess:{s.id}" in list_ids(last(store))
+
+
+def test_greeting_variants_all_bypass():
+    """All greeting words in the bypass list reach the session list without LLM."""
+    for word in ("hello", "namaste", "नमस्ते", "menu", "start", "hey", "hii"):
+        store, sender, convo, clinic, s, parse, flow = build(lang="hi")
+
+        async def broken_parse(text, ctx):
+            raise RuntimeError("LLM down")
+
+        flow.parse = broken_parse
+        run(_in(flow, store, text=word))
+        assert last(store)["kind"] == "list", f"greeting word {word!r} did not produce session list"
+
+
+def test_greeting_resets_mid_flow_no_active_token():
+    """'Hi' while in choosing_session (no active token) resets and re-shows sessions."""
+    store, sender, convo, clinic, s, parse, flow = build()
+    # advance to choosing_session
+    run(_in(flow, store, button_id=f"sess:{s.id}"))  # -> choosing_time
+    # now send a greeting — no active token, should reset
+    run(_in(flow, store, text="hi"))
+    assert last(store)["kind"] == "list"
+
+
+def test_greeting_with_active_token_shows_status_not_session_list():
+    """'Hi' with an active booking shows status, does NOT reset or show session list."""
+    store, sender, convo, clinic, s, parse, flow = build()
+    pid = run(convo.get_or_create_patient(clinic.id, WA, "self"))
+    run(
+        engine.book(
+            convo.repo, dt(9),
+            clinic_id=clinic.id, session_id=s.id,
+            patient_id=pid, requested_time=None, source=Source.whatsapp,
+        )
+    )
+    store.outbound.clear()
+    run(_in(flow, store, text="hi"))
+    assert len(store.outbound) == 1
+    reply = body(last(store))
+    from app.wa.templates import prompt
+    # reply uses greeting_has_active prompt — contains token number
+    assert "1" in reply  # token number
+    assert last(store)["kind"] == "text"
+
+
+def test_low_confidence_choosing_time_reasks_time_buttons():
+    """Gibberish in choosing_time state re-sends the ASAP button (no dead-end)."""
+    store, sender, convo, clinic, s, parse, flow = build()
+    run(_in(flow, store, button_id=f"sess:{s.id}"))  # -> choosing_time
+    store.outbound.clear()
+    # LLM returns low confidence
+    parse.push(intent="other", confidence=0.1)
+    run(_in(flow, store, text="blah blah"))
+    kinds = [o["kind"] for o in store.outbound]
+    assert "button" in kinds  # ASAP button re-sent
+    assert any("time:asap" in btn_ids(o) for o in store.outbound if o["kind"] == "button")
+
+
+def test_low_confidence_choosing_profile_reasks_profile_buttons():
+    """Gibberish in choosing_profile re-sends the self/family buttons."""
+    store, sender, convo, clinic, s, parse, flow = build()
+    run(_in(flow, store, button_id=f"sess:{s.id}"))
+    run(_in(flow, store, button_id="time:asap"))  # -> choosing_profile
+    store.outbound.clear()
+    parse.push(intent="other", confidence=0.1)
+    run(_in(flow, store, text="blah"))
+    assert any(
+        set(btn_ids(o)) == {"profile:self", "profile:family"}
+        for o in store.outbound if o["kind"] == "button"
+    )
+
+
+def test_low_confidence_confirm_cancel_reasks_confirm_buttons():
+    """Gibberish in confirm_cancel re-sends the yes/no cancel buttons."""
+    store, sender, convo, clinic, s, parse, flow = build()
+    pid = run(convo.get_or_create_patient(clinic.id, WA, "self"))
+    run(
+        engine.book(
+            convo.repo, dt(9),
+            clinic_id=clinic.id, session_id=s.id,
+            patient_id=pid, requested_time=None, source=Source.whatsapp,
+        )
+    )
+    run(_in(flow, store, text="cancel"))  # -> confirm_cancel
+    store.outbound.clear()
+    parse.push(intent="other", confidence=0.1)
+    run(_in(flow, store, text="idontknow"))
+    assert any(
+        set(btn_ids(o)) == {"confirmcancel:yes", "confirmcancel:no"}
+        for o in store.outbound if o["kind"] == "button"
+    )
+
+
 def test_stop_deletes_and_cancels():
     store, sender, convo, clinic, s, parse, flow = build()
     pid = run(convo.get_or_create_patient(clinic.id, WA, "self"))

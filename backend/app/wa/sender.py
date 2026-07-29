@@ -199,5 +199,8 @@ class Sender:
                 continue
             break
         assert last_resp is not None
+        from app import obs
+
+        obs.record_send_failure()  # surfaced by /metrics
         last_resp.raise_for_status()
         return last_resp.json()

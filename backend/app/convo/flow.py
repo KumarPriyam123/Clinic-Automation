@@ -3,14 +3,15 @@ choosing_profile → (booked), plus confirm_cancel.
 
 Buttons/lists drive transitions directly; free text goes through the LLM
 (confidence < 0.7 ⇒ re-ask with buttons, never guess); keywords (status /
-kitna time / cancel / STOP) bypass everything. The LLM never mutates state and
-never produces medical text. All engine mutations go through
+kitna time / cancel / STOP / greeting) bypass everything. The LLM never
+mutates state and never produces medical text. All engine mutations go through
 ``backend.engine_call`` so production gets a real transaction + row lock.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
+import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import UUID
@@ -35,6 +36,33 @@ from app.wa.webhook import InboundMessage
 
 IST = ZoneInfo("Asia/Kolkata")
 ParseFn = Callable[[str, dict], Awaitable[Intent]]
+
+_GREETING_WORDS = frozenset(
+    {
+        "hi",
+        "hii",
+        "hiii",
+        "hello",
+        "helo",
+        "hey",
+        "namaste",
+        "namaskar",
+        "नमस्ते",
+        "नमस्कार",
+        "हाय",
+        "हैलो",
+        "salaam",
+        "assalam",
+        "start",
+        "menu",
+        "शुरू",
+    }
+)
+_PUNCT_TAIL = re.compile(r"[!?,.।\s]+$")  # । = Devanagari danda
+
+
+def _is_greeting(low: str) -> bool:
+    return _PUNCT_TAIL.sub("", low).strip() in _GREETING_WORDS
 
 
 def _is_status(low: str) -> bool:
@@ -85,18 +113,26 @@ class Flow:
         if inbound.button_id:
             return await self._button(now, clinic, wa, lang, st, inbound.button_id, first)
 
-        # keyword bypass
+        # keyword bypass — all checked BEFORE llm.parse() so they work when LLM is down
         if _is_status(low):
             return await self._status(now, clinic, wa, lang)
         if _is_cancel_kw(low):
             return await self._ask_cancel(now, clinic, wa, lang, st)
+        if _is_greeting(low):
+            return await self._greeting(now, clinic, wa, lang, st, first)
 
         # awaiting a typed family-member name
         if st.state == "choosing_profile" and st.context.get("awaiting_name"):
             return await self._book(now, clinic, wa, lang, st, profile_name=text or "family")
 
         # free text -> LLM
-        intent = await self.parse(text, {"state": st.state})
+        intent = await self.parse(
+            text,
+            {
+                "state": st.state,
+                "session_name": st.context.get("session_name", ""),
+            },
+        )
         if intent.confidence < 0.7:
             return await self._low_confidence(now, clinic, wa, lang, st)
 
@@ -129,6 +165,10 @@ class Flow:
         prefix, _, arg = button_id.partition(":")
         if prefix == "sess":
             st.context["session_id"] = arg
+            # Recover session name from map saved by _offer_sessions so LLM gets context
+            name = (st.context.get("_session_names") or {}).get(arg, "")
+            if name:
+                st.context["session_name"] = name
             return await self._offer_time(now, clinic, wa, lang, st)
         if prefix == "time":  # time:asap
             st.context["requested"] = "asap"
@@ -166,6 +206,8 @@ class Flow:
             {"id": f"sess:{s.id}", "title": s.name, "description": f"{s.free} slots"}
             for s in sessions
         ]
+        # Save session_id→name map so _button can recover the name for LLM context
+        st.context["_session_names"] = {str(s.id): s.name for s in sessions}
         body = prompt("choose_session", lang)
         if first:
             body = prompt("consent", lang) + "\n\n" + body
@@ -303,10 +345,46 @@ class Flow:
         await self._say(now, clinic.id, wa, prompt("gap_accepted", lang))
 
     # --- helpers --------------------------------------------------------- #
+    async def _greeting(self, now, clinic, wa, lang, st, first: bool) -> None:
+        """Greeting keyword handler — runs before any LLM call.
+
+        Precedence rule: if the patient already has an active token, show their
+        current status and preserve conversation state — silently wiping an
+        in-flight booking is worse than being redundant. If no active token,
+        reset to idle and re-welcome (with consent line on very first contact).
+        """
+        info = await self.backend.active_entry(clinic.id, wa)
+        if info is not None:
+            await self._say(
+                now,
+                clinic.id,
+                wa,
+                prompt(
+                    "greeting_has_active",
+                    lang,
+                    token=info.token_number,
+                    ahead=info.ahead,
+                    eta=fmt_time(info.eta),
+                ),
+            )
+            return
+        await self._offer_sessions(now, clinic, wa, lang, ConvState(), first)
+
     async def _low_confidence(self, now, clinic, wa, lang, st) -> None:
+        """Re-render current step's prompt so no state is a dead end.
+
+        Every non-idle state re-sends its own buttons after the low-confidence
+        message, and all states mention 'menu' as a plain-text escape hatch.
+        """
         await self._say(now, clinic.id, wa, prompt("low_confidence", lang))
-        if st.state == "idle":
+        if st.state in ("idle", "choosing_session"):
             await self._offer_sessions(now, clinic, wa, lang, st, first=False)
+        elif st.state == "choosing_time":
+            await self._offer_time(now, clinic, wa, lang, st)
+        elif st.state == "choosing_profile":
+            await self._offer_profiles(now, clinic, wa, lang, st)
+        elif st.state == "confirm_cancel":
+            await self._ask_cancel(now, clinic, wa, lang, st)
 
     async def _say(self, now, clinic_id, wa, text: str, *, first: bool = False) -> None:
         await self.sender.send_text(now, wa, text, clinic_id=clinic_id)

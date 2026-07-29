@@ -219,6 +219,70 @@ def test_t13_overflow_suggests_alternatives():
     assert any(a.session_id == alt.id for a in res.overflow.alternatives)
 
 
+def test_t13b_overflow_eta_past_end():
+    """Queue depth pushes projected ETA past session end -> OverflowSuggestion."""
+    repo = MemRepo()
+    # 30-min avg, session ends at 10:35 — 3rd patient's ETA = 11:00 > 10:35
+    s = open_session(repo, dt(10), cap=40, avg=1800, end=dt(10, 35))
+    alt = open_session(repo, dt(10), cap=40)
+    alt.clinic_id = s.clinic_id
+    p1, p2, p3 = (patient(repo, s.clinic_id, i) for i in (1, 2, 3))
+    do_book(repo, s, p1, dt(10, 0, 0))  # ETA 10:00, clock -> 10:30
+    do_book(repo, s, p2, dt(10, 0, 1))  # ETA 10:30, clock -> 11:00
+    res = do_book(repo, s, p3, dt(10, 0, 2))  # projected ETA 11:00 >= end 10:35
+    assert res.overflow is not None and res.overflow.reason == "past_end"
+    assert any(a.session_id == alt.id for a in res.overflow.alternatives)
+
+
+def test_asap_into_future_session_uses_start_at():
+    """ASAP booking into a not-yet-started session uses session.start_at as priority_time."""
+    repo = MemRepo()
+    s = SessionState(
+        id=uuid4(),
+        clinic_id=uuid4(),
+        date=dt(10).date(),
+        name="morning",
+        start_at=dt(10),
+        end_at=dt(16),
+        token_cap=40,
+        status=SessionStatus.scheduled,
+        avg_consult_s=420,
+    )
+    repo.add_session(s)
+    p = patient(repo, s.clinic_id, 1)
+    res = do_book(repo, s, p, dt(8))  # book 2h before session start, ASAP
+    assert res.entry.priority_time == dt(10)
+
+
+def test_asap_into_running_session_uses_now():
+    """ASAP into an already-running session uses now (session.start_at is in the past)."""
+    repo = MemRepo()
+    s = open_session(repo, dt(9))  # session running since 09:00
+    p = patient(repo, s.clinic_id, 1)
+    res = do_book(repo, s, p, dt(10))  # book at 10:00 ASAP
+    assert res.entry.priority_time == dt(10)
+
+
+def test_specific_time_before_session_start_clamped():
+    """A specific time before session start is clamped to session.start_at."""
+    repo = MemRepo()
+    s = SessionState(
+        id=uuid4(),
+        clinic_id=uuid4(),
+        date=dt(10).date(),
+        name="morning",
+        start_at=dt(10),
+        end_at=dt(16),
+        token_cap=40,
+        status=SessionStatus.scheduled,
+        avg_consult_s=420,
+    )
+    repo.add_session(s)
+    p = patient(repo, s.clinic_id, 1)
+    res = do_book(repo, s, p, dt(8), req=dt(8, 0))  # requested 08:00 for 10:00 session
+    assert res.entry.priority_time == dt(10)  # clamped to session start
+
+
 def test_t14_second_active_token_same_number_rejected():
     repo = MemRepo()
     s = open_session(repo, dt(10))

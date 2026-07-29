@@ -14,6 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from app import obs
 from app.jobs.digest import run_digest
 from app.jobs.pings import ping_scan
 from app.jobs.store import JobBackend
@@ -30,10 +31,14 @@ def build_scheduler(
     sched = AsyncIOScheduler(timezone=UTC)
 
     async def _sweep() -> None:
-        await sweep_tick(backend, dispatcher, datetime.now(UTC))
+        now = datetime.now(UTC)
+        obs.mark_scheduler_tick(now)  # liveness signal for /metrics
+        await sweep_tick(backend, dispatcher, now)
 
     async def _ping() -> None:
-        await ping_scan(backend, dispatcher, datetime.now(UTC))
+        now = datetime.now(UTC)
+        obs.mark_scheduler_tick(now)
+        await ping_scan(backend, dispatcher, now)
 
     async def _stamp() -> None:
         await stamp_daily(backend, datetime.now(UTC))

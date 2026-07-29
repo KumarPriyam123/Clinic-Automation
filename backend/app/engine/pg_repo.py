@@ -21,7 +21,7 @@ from uuid import UUID
 import asyncpg
 
 from app.engine.results import SessionRef
-from app.engine.state import RELEASED_STATUSES, Entry, Patient, SessionState
+from app.engine.state import RELEASED_STATUSES, STOP_ISSUING_BUFFER, Entry, Patient, SessionState
 from app.models import SessionStatus, Source, Status
 
 _ACTIVE_SQL = "('booked','arrived','called','in_consult','skipped')"
@@ -252,7 +252,7 @@ class PgRepo:
             order by s.date
             """,
             clinic_id,
-            after,
+            after + STOP_ISSUING_BUFFER,
             list(_RELEASED),
         )
         return [

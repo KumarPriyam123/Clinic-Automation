@@ -48,6 +48,17 @@ _RESTORE_COLS = (
 
 _ACTIVE = {"booked", "arrived", "called", "in_consult", "skipped"}
 
+# Maps session.status -> controls the panel should show.  Drive UI off this so
+# meaningless buttons (pause on cancelled, close on already-closed) are never
+# rendered.
+_ALLOWED_ACTIONS: dict[str, list[str]] = {
+    "scheduled": ["start"],
+    "open": ["pause", "close", "cancel_today", "delay", "walkin", "emergency", "next"],
+    "paused": ["resume", "close", "cancel_today"],
+    "closed": ["reopen"],
+    "cancelled": ["reopen"],
+}
+
 
 # --------------------------------------------------------------------------- #
 # request bodies
@@ -230,6 +241,7 @@ async def _queue_snapshot(con: Any, session: dict) -> dict:
             "doctor_free_at": _iso(session["doctor_free_at"]),
             "served": served,
             "waiting": waiting,
+            "allowed_actions": _ALLOWED_ACTIONS.get(session["status"], []),
         },
         "now_serving": now_serving,
         "entries": entries,

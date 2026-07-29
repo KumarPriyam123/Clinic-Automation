@@ -212,8 +212,18 @@ PROMPTS: dict[str, dict[str, str]] = {
         "en": "This session is full. Please pick another:",
     },
     "low_confidence": {
-        "hi": "माफ़ करें, समझ नहीं आया। कृपया नीचे बटन से चुनें।",
-        "en": "Sorry, I didn't catch that. Please choose with a button below.",
+        "hi": "माफ़ करें, समझ नहीं आया। नीचे बटन से चुनें या 'menu' लिखें।",
+        "en": "Sorry, I didn't catch that. Use a button below or type 'menu' to restart.",
+    },
+    "greeting_has_active": {
+        "hi": (
+            "आपका टोकन {token} • आपसे पहले {ahead} मरीज़ • अनुमानित समय {eta} 📋"
+            " रद्द करने के लिए 'cancel' लिखें।"
+        ),
+        "en": (
+            "Your token {token} • {ahead} ahead of you • est. time {eta} 📋"
+            " Type 'cancel' to cancel your booking."
+        ),
     },
     "gap_accepted": {
         "hi": "बढ़िया! आपका समय पहले कर दिया गया है।",

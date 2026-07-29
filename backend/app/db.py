@@ -33,16 +33,53 @@ async def _init_connection(con: asyncpg.Connection) -> None:
         )
 
 
+def _is_pooler(dsn: str) -> bool:
+    """Supabase's connection pooler (pgBouncer, transaction mode)."""
+    return "pooler.supabase.com" in dsn or ":6543" in dsn
+
+
+def _is_supabase(dsn: str) -> bool:
+    return "supabase.co" in dsn or "supabase.com" in dsn
+
+
+def _connect_kwargs(dsn: str) -> dict[str, Any]:
+    """asyncpg connect args derived from the DSN + settings overrides.
+
+    * statement_cache_size=0 on the pooler — pgBouncer transaction mode does not
+      support prepared statements (asyncpg would raise at query time otherwise).
+    * ssl='require' for Supabase.
+    Both auto-detected from the DSN; explicit settings win when provided.
+    """
+    kw: dict[str, Any] = {}
+
+    scs = settings.DB_STATEMENT_CACHE_SIZE
+    if scs is None and _is_pooler(dsn):
+        scs = 0
+    if scs is not None:
+        kw["statement_cache_size"] = scs
+
+    ssl = settings.DB_SSL
+    if ssl is None:
+        ssl = _is_supabase(dsn)
+    if ssl:
+        kw["ssl"] = "require"
+
+    return kw
+
+
 async def init_pool(dsn: str | None = None, **kwargs: Any) -> asyncpg.Pool:
     """Create the shared pool (idempotent). Call once at startup / test setup."""
     global _pool
     if _pool is None:
+        target = dsn or settings.DATABASE_URL
+        connect_kwargs = _connect_kwargs(target)
+        connect_kwargs.update(kwargs)  # explicit caller kwargs win
         _pool = await asyncpg.create_pool(
-            dsn or settings.DATABASE_URL,
+            target,
             init=_init_connection,
             min_size=1,
             max_size=10,
-            **kwargs,
+            **connect_kwargs,
         )
     return _pool
 

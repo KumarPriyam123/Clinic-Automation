@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import pathlib
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -18,6 +19,16 @@ from app.wa.sender import Sender
 from app.wa.store import InMemoryWaStore
 from app.wa.templates import get
 from app.wa.webhook import build_router, normalize_inbound, set_message_handler, verify_signature
+
+FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+
+
+def _load(name: str) -> dict:
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _sign(secret: str, body: bytes) -> str:
+    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 T0 = datetime(2026, 7, 5, 9, 0, tzinfo=UTC)
 GRAPH = "https://graph.facebook.com/v20.0/123/messages"
@@ -245,3 +256,96 @@ def test_webhook_post_signature_and_dedupe(monkeypatch):
         assert len(seen) == 1  # handler fired exactly once
     finally:
         set_message_handler(None)
+
+
+# --- signature regression: known body + known secret ------------------- #
+def test_verify_signature_regression_known_body():
+    """Exact bytes + expected digest must match; tampered body must not."""
+    secret = "deadbeefdeadbeefdeadbeefdeadbeef"
+    body = b'{"object":"whatsapp_business_account","entry":[]}'
+    sig = _sign(secret, body)
+    assert verify_signature(secret, body, sig) is True
+    # tamper: one byte changed → digest must reject
+    tampered = b'{"object":"whatsapp_business_account","entry":[]}!'
+    assert verify_signature(secret, tampered, sig) is False
+
+
+# --- fixture-based normalize_inbound tests ----------------------------- #
+def test_normalize_fixture_text():
+    msgs = normalize_inbound(_load("wa_text.json"))
+    assert len(msgs) == 1
+    m = msgs[0]
+    assert m.kind == "text"
+    assert m.text == "hi"
+    assert m.wa_number == "919999999999"
+    assert m.phone_number_id == "1198540706681830"
+    assert m.wamid is not None
+
+
+def test_normalize_fixture_button_reply():
+    msgs = normalize_inbound(_load("wa_button_reply.json"))
+    assert len(msgs) == 1
+    m = msgs[0]
+    assert m.kind == "button_reply"
+    assert m.button_id == "arrived:550e8400-e29b-41d4-a716-446655440000"
+    assert m.text == "आ गया"
+    assert m.phone_number_id == "1198540706681830"
+
+
+def test_normalize_fixture_list_reply():
+    msgs = normalize_inbound(_load("wa_list_reply.json"))
+    assert len(msgs) == 1
+    m = msgs[0]
+    assert m.kind == "list_reply"
+    assert m.button_id == "sess:660e8400-e29b-41d4-a716-446655440000"
+    assert m.text == "Morning Session"
+
+
+def test_normalize_fixture_status_event_returns_no_messages():
+    """Status events have statuses[] not messages[] — normalize must return []."""
+    msgs = normalize_inbound(_load("wa_status.json"))
+    assert msgs == []
+
+
+def test_normalize_fixture_unknown_type_passes_through():
+    """Sticker / unrecognized type: still produces one InboundMessage (kind=text, text=None).
+    The flow ignores empty text gracefully; we must not crash or drop the wamid."""
+    msgs = normalize_inbound(_load("wa_unknown.json"))
+    assert len(msgs) == 1
+    assert msgs[0].kind == "text"
+    assert msgs[0].text is None
+    assert msgs[0].wamid is not None
+
+
+# --- POST route: status event and unknown shape ACK 200 ---------------- #
+def test_webhook_post_status_event_acks_200(monkeypatch):
+    monkeypatch.setattr(cfg, "WA_APP_SECRET", "")  # bypass sig check for this test
+    raw = json.dumps(_load("wa_status.json")).encode()
+    seen: list = []
+
+    async def handler(msg):
+        seen.append(msg)
+
+    set_message_handler(handler)
+    try:
+        c = _client(InMemoryWaStore())
+        resp = c.post("/webhook", content=raw, headers={"Content-Type": "application/json"})
+        assert resp.status_code == 200
+        assert seen == []  # status event must never reach handler
+    finally:
+        set_message_handler(None)
+
+
+def test_webhook_post_unknown_shape_acks_200(monkeypatch):
+    monkeypatch.setattr(cfg, "WA_APP_SECRET", "")
+    raw = json.dumps(_load("wa_unknown.json")).encode()
+    c = _client(InMemoryWaStore())
+    resp = c.post("/webhook", content=raw, headers={"Content-Type": "application/json"})
+    assert resp.status_code == 200
+
+
+def test_webhook_post_bad_json_acks_200(monkeypatch):
+    monkeypatch.setattr(cfg, "WA_APP_SECRET", "")
+    c = _client(InMemoryWaStore())
+    resp = c.post("/webhook", content=b"not-json", headers={"Content-Type": "application/json"})
+    assert resp.status_code == 200

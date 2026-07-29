@@ -15,6 +15,7 @@ implementation.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -33,6 +34,35 @@ from app.engine.state import (
     grace_seconds,
 )
 from app.models import SessionStatus, Source, Status
+
+log = logging.getLogger("clinicq.engine")
+
+# Consult duration sanity bounds.  Durations outside this window are discarded
+# before updating avg_consult_s so a forgotten NEXT tap cannot poison the ETA
+# for the rest of the session.  The patient is still marked DONE; only the
+# rolling-average update is skipped.
+CONSULT_MIN_S = 30  # anything shorter is a mis-tap, not a real consult
+CONSULT_MAX_S = 2700  # 45 min; beyond this assume the doctor forgot to tap NEXT
+
+
+def _project_eta(
+    session: SessionState, entries: list[Entry], priority_time: datetime, now: datetime
+) -> datetime:
+    """Dry-run ETA for a would-be new entry, without inserting it.
+
+    Walks the queue forward past all existing waiting entries then returns
+    where the new entry's ETA would land.  Used to catch ETA-past-end before
+    committing the booking.
+    """
+    waiting = sorted(
+        (e for e in entries if e.status in WAITING_STATUSES),
+        key=Entry.order_key,
+    )
+    clock = max(now, session.doctor_free_at) if session.doctor_free_at else now
+    avg = timedelta(seconds=session.avg_consult_s)
+    for e in waiting:
+        clock = max(clock, e.priority_time) + avg
+    return max(clock, priority_time)
 
 
 # --------------------------------------------------------------------------- #
@@ -82,7 +112,14 @@ async def _finalize_in_consult(
         )
         e.status = Status.done
         e.done_at = now
-        session.avg_consult_s = round(0.7 * session.avg_consult_s + 0.3 * actual)
+        if CONSULT_MIN_S <= actual <= CONSULT_MAX_S:
+            session.avg_consult_s = round(0.7 * session.avg_consult_s + 0.3 * actual)
+        else:
+            log.warning(
+                "consult_out_of_range entry_id=%s actual_s=%.0f — avg_consult_s unchanged",
+                e.id,
+                actual,
+            )
         session.consults_done += 1
         session.doctor_free_at = now
         await repo.save_entry(e)
@@ -154,13 +191,18 @@ async def close_session(repo: Repo, now: datetime, session_id: UUID) -> EngineRe
 
 
 async def reopen_session(repo: Repo, now: datetime, session_id: UUID) -> EngineResult:
-    """Recover from a mis-tapped close: status closed -> open, doctor clock reset.
+    """Recover from a mis-tapped close or cancel: status (closed|cancelled) -> open.
 
     Deliberately does NOT touch entries. Expired/cancelled patients have already
     been sent "book tomorrow" / "clinic closed" messages — resurrecting them
     would summon people who were told not to come. Reopening only restores the
-    ability to work the queue again (walk-ins, new bookings, NEXT)."""
+    ability to work the queue again (walk-ins, new bookings, NEXT).
+
+    Allowed from: closed, cancelled (mis-tap recovery for today's session).
+    """
     session = await repo.lock_session(session_id)
+    if session.status not in (SessionStatus.closed, SessionStatus.cancelled):
+        raise InvalidTransition(f"cannot reopen from {session.status}")
     session.status = SessionStatus.open
     session.doctor_free_at = now
     await repo.save_session(session)
@@ -191,8 +233,11 @@ async def book(
     if await repo.has_active_token(clinic_id, patient.wa_number):
         raise DuplicateActiveToken(patient.wa_number)
 
-    # priority_time = max(requested_time or now, now) — no leapfrogging waiters
-    priority_time = max(requested_time or now, now)
+    # floor = earliest time anyone can be served: max(now, session.start_at).
+    # ASAP => floor.  Specific time => max(requested, floor) — no leapfrogging,
+    # and no booking before the session opens.
+    floor = max(now, session.start_at)
+    priority_time = floor if requested_time is None else max(requested_time, floor)
 
     # overflow checks -> suggest alternatives instead of forcing the token in
     reason: str | None = None
@@ -200,7 +245,8 @@ async def book(
         reason = "closed"
     elif _issued_count(entries) >= session.token_cap:
         reason = "cap"
-    elif priority_time >= session.end_at:
+    elif _project_eta(session, entries, priority_time, now) >= session.end_at:
+        # covers both priority_time-past-end AND ETA-past-end due to queue depth
         reason = "past_end"
     if reason:
         alts = await repo.future_sessions_with_space(clinic_id, now)

@@ -13,7 +13,14 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from app.engine.results import SessionRef
-from app.engine.state import ACTIVE_STATUSES, RELEASED_STATUSES, Entry, Patient, SessionState
+from app.engine.state import (
+    ACTIVE_STATUSES,
+    RELEASED_STATUSES,
+    STOP_ISSUING_BUFFER,
+    Entry,
+    Patient,
+    SessionState,
+)
 from app.models import SessionStatus
 
 
@@ -126,12 +133,13 @@ class MemRepo:
         self, clinic_id: UUID, after: datetime
     ) -> list[SessionRef]:
         out: list[SessionRef] = []
+        cutoff = after + STOP_ISSUING_BUFFER
         for s in self.sessions.values():
             if s.clinic_id != clinic_id:
                 continue
             if s.status not in (SessionStatus.scheduled, SessionStatus.open):
                 continue
-            if s.end_at <= after:
+            if s.end_at <= cutoff:
                 continue
             issued = sum(
                 1

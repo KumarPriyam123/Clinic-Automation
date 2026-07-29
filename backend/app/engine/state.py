@@ -19,6 +19,7 @@ from app.models import SessionStatus, Source, Status
 GAP_THRESHOLD = timedelta(minutes=10)
 GAP_OFFER_TTL = timedelta(minutes=5)
 ETA_PING_THRESHOLD_S = 600  # notify only when ETA moves > 10 min
+STOP_ISSUING_BUFFER = timedelta(minutes=30)  # stop offering slots 30 min before close
 
 #: entries still "in play" for the one-active-token rule and the queue
 ACTIVE_STATUSES = frozenset(

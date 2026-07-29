@@ -170,3 +170,87 @@ def test_reopen_does_not_resurrect_notified_patients():
         e.status in (Status.booked, Status.arrived) for e in run(repo.list_entries(s.id))
     )
     assert res.notifications == []
+
+
+# --------------------------------------------------------------------------- #
+# Part 1: reopen from cancelled
+# --------------------------------------------------------------------------- #
+def test_reopen_from_cancelled_status_open_entries_untouched():
+    """Mis-tap on cancel-today: reopen restores status=open, entries unchanged."""
+    repo = MemRepo()
+    s = open_session(repo, dt(10), avg=600)
+    b1 = book(repo, s, patient(repo, s.clinic_id, 1), dt(10), req=dt(11))
+    b2 = book(repo, s, patient(repo, s.clinic_id, 2), dt(10), req=dt(12))
+    run(engine.cancel_session_today(repo, dt(10, 20), s.id))
+    assert s.status == SessionStatus.cancelled
+    assert b1.status == Status.cancelled and b2.status == Status.cancelled
+
+    res = run(engine.reopen_session(repo, dt(10, 25), s.id))
+
+    assert s.status == SessionStatus.open
+    assert s.doctor_free_at == dt(10, 25)
+    # already-cancelled entries stay cancelled — no resurrection
+    assert b1.status == Status.cancelled and b2.status == Status.cancelled
+    assert res.notifications == []
+
+
+def test_reopened_cancelled_session_accepts_new_booking():
+    """After reopen from cancelled, new bookings are accepted normally."""
+    repo = MemRepo()
+    s = open_session(repo, dt(10), avg=600)
+    run(engine.cancel_session_today(repo, dt(10, 20), s.id))
+    run(engine.reopen_session(repo, dt(10, 25), s.id))
+
+    # fresh patient walks in after reopen
+    new_p = patient(repo, s.clinic_id, 99)
+    res = book(repo, s, new_p, dt(10, 26))
+    assert res is not None  # entry created
+    assert res.status == Status.booked
+
+
+# --------------------------------------------------------------------------- #
+# Part 2: avg_consult_s clamping
+# --------------------------------------------------------------------------- #
+def test_long_consult_does_not_poison_avg():
+    """26-hour consult (forgotten NEXT) must NOT update avg_consult_s."""
+    repo = MemRepo()
+    s = open_session(repo, dt(10), avg=600)
+    served = serve(repo, s, patient(repo, s.clinic_id, 0), dt(10))
+    # "close" 26 hours later — actual = 26 * 3600 = 93600s >> CONSULT_MAX_S
+    run(engine.next_patient(repo, dt(10) + timedelta(hours=26), s.id))
+    assert s.avg_consult_s == 600  # unchanged
+    assert served.status == Status.done
+    assert s.consults_done == 1
+
+
+def test_short_normal_consult_updates_avg():
+    """4-minute consult is within range and updates avg normally."""
+    repo = MemRepo()
+    s = open_session(repo, dt(10), avg=600)
+    serve(repo, s, patient(repo, s.clinic_id, 0), dt(10))
+    run(engine.next_patient(repo, dt(10, 4), s.id))  # 4-min actual = 240s
+    assert s.avg_consult_s == round(0.7 * 600 + 0.3 * 240)  # = 492
+
+
+def test_out_of_range_via_close_skips_avg():
+    """26-hour consult finalized via close_session: avg unchanged."""
+    repo = MemRepo()
+    s = open_session(repo, dt(10), avg=600)
+    serve(repo, s, patient(repo, s.clinic_id, 0), dt(10))
+    run(engine.close_session(repo, dt(10) + timedelta(hours=26), s.id))
+    assert s.avg_consult_s == 600
+
+
+def test_avg_clamping_parity_close_vs_next():
+    """Out-of-range duration is discarded identically whether finalized by NEXT or close."""
+    repo_a, repo_b = MemRepo(), MemRepo()
+    sa = open_session(repo_a, dt(10), avg=600)
+    sb = open_session(repo_b, dt(10), avg=600)
+    serve(repo_a, sa, patient(repo_a, sa.clinic_id, 0), dt(10))
+    serve(repo_b, sb, patient(repo_b, sb.clinic_id, 0), dt(10))
+
+    long_later = dt(10) + timedelta(hours=30)
+    run(engine.close_session(repo_a, long_later, sa.id))
+    run(engine.next_patient(repo_b, long_later, sb.id))
+
+    assert sa.avg_consult_s == sb.avg_consult_s == 600

@@ -186,6 +186,13 @@
     "SessionMetaOut": {
       "additionalProperties": false,
       "properties": {
+        "allowed_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Actions",
+          "type": "array"
+        },
         "avg_consult_s": {
           "title": "Avg Consult S",
           "type": "integer"
@@ -263,7 +270,8 @@
         "avg_consult_s",
         "doctor_free_at",
         "served",
-        "waiting"
+        "waiting",
+        "allowed_actions"
       ],
       "title": "SessionMetaOut",
       "type": "object"

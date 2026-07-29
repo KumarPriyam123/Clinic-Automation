@@ -15,7 +15,14 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from app.engine.results import EngineResult
-from app.engine.state import ACTIVE_STATUSES, RELEASED_STATUSES, WAITING_STATUSES, Entry, Patient
+from app.engine.state import (
+    ACTIVE_STATUSES,
+    RELEASED_STATUSES,
+    STOP_ISSUING_BUFFER,
+    WAITING_STATUSES,
+    Entry,
+    Patient,
+)
 from app.models import SessionStatus, Status
 from app.wa.notify import Recipient, RecipientResolver
 
@@ -126,7 +133,7 @@ class MemConvo:
                 SessionStatus.open,
             ):
                 continue
-            if s.end_at <= now or s.date > horizon:
+            if s.end_at <= now + STOP_ISSUING_BUFFER or s.date > horizon:
                 continue
             issued = sum(
                 1
@@ -251,6 +258,7 @@ class PgConvo:
         from app import db
 
         horizon = (now + timedelta(days=BOOKING_WINDOW_DAYS)).date()
+        cutoff = now + STOP_ISSUING_BUFFER  # stop issuing 30 min before close
         async with db.get_pool().acquire() as con:
             rows = await con.fetch(
                 """
@@ -267,7 +275,7 @@ class PgConvo:
                 order by s.date, s.start_at
                 """,
                 clinic_id,
-                now,
+                cutoff,
                 horizon,
                 _RELEASED_VALUES,
             )

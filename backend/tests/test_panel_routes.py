@@ -82,6 +82,19 @@ def test_every_mutating_route_smoke():
                 token = login.json()["token"]
                 h = {"Authorization": f"Bearer {token}"}
 
+                # --- ops: /metrics (no auth), shape + live pool ---
+                m = await c.get("/metrics")
+                assert m.status_code == 200, m.text
+                mj = m.json()
+                assert {
+                    "bookings_today",
+                    "wa_sends_today",
+                    "wa_send_failures",
+                    "scheduler_last_tick",
+                    "db_pool",
+                } <= set(mj)
+                assert mj["db_pool"]["max"] >= 1
+
                 # --- reads ---
                 today = _check(await c.get("/panel/session/today", headers=h))
                 assert today.session is not None

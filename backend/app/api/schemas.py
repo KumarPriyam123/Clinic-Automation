@@ -34,6 +34,7 @@ class SessionMetaOut(BaseModel):
     doctor_free_at: str | None
     served: int
     waiting: int
+    allowed_actions: list[str]
 
 
 class NowServingOut(BaseModel):

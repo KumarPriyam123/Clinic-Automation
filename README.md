@@ -57,6 +57,17 @@ npm run dev
 
 Opens `http://localhost:3000` → renders **ClinicQ panel**.
 
-## Status
+## Deploy & pilot
 
-P0 scaffold only: `/healthz` + placeholder panel. Queue engine, WhatsApp layer, LLM parser, and migrations land in later phases (see `clinicq_build_plan.md`).
+Deploy-ready: backend (Docker + Cloudflare Tunnel), panel (Vercel), Postgres (Supabase).
+
+- `docs/DEPLOY.md` — full runbook (Meta/WhatsApp, Supabase, droplet, ENV matrix, smoke checklist).
+- `docs/ONBOARDING.md` — 60-minute clinic setup.
+- `docs/PILOT_METRICS.md` — the case-study SQL.
+- Migrations without the Supabase CLI: `python scripts/migrate.py [--seed]`.
+- Create a clinic: `python scripts/create_clinic.py --slug ... --pin ...`.
+- QR poster: `python scripts/qr_poster.py --number ... --clinic ...` (needs `pip install ".[pilot]"`).
+
+**Scheduler single-instance:** APScheduler runs in-process — keep `uvicorn --workers 1`
+and `RUN_SCHEDULER=true` in exactly one process, or every job double-fires
+(duplicate patient sends). See DEPLOY.md.
