@@ -11,17 +11,18 @@
 import assert from "node:assert/strict";
 
 // Inline the URL-matching predicate from sw.js (kept in sync manually;
-// if the logic changes in sw.js, update here and the CACHE_VERSION).
+// if the logic changes in sw.js, update here and bump CACHE_VERSION).
 function shouldPassToNetwork(pathname, requestHostname, swHostname) {
-  if (pathname.startsWith("/panel/")) return true;
+  if (pathname.startsWith("/api/")) return true;    // proxy mode
+  if (pathname.startsWith("/panel/")) return true;  // direct mode
   if (requestHostname !== swHostname) return true;
   return false;
 }
 
 const SW_HOST = "localhost"; // panel origin in dev / any prod origin
 
-// --- API paths: MUST pass to network (never intercepted) -----------------
-const apiPaths = [
+// --- Direct-mode API paths (/panel/*): MUST pass to network --------------
+const directApiPaths = [
   "/panel/session/today",
   "/panel/queue",
   "/panel/next",
@@ -41,12 +42,39 @@ const apiPaths = [
   "/panel/settings",
 ];
 
-for (const p of apiPaths) {
+for (const p of directApiPaths) {
   assert(
     shouldPassToNetwork(p, SW_HOST, SW_HOST),
-    `FAIL: SW intercepted API path ${p} — must never cache /panel/* responses`,
+    `FAIL: SW intercepted direct-mode path ${p}`,
   );
 }
+
+// --- Proxy-mode API paths (/api/*): MUST pass to network -----------------
+// In proxy mode NEXT_PUBLIC_API_URL=/api, so all calls are same-origin /api/*.
+// Without this check, shouldPassToNetwork would return false (same host, not
+// /panel/*) and the SW would cache queue responses — silent stale-data bug.
+const proxyApiPaths = [
+  "/api/panel/session/today",
+  "/api/panel/queue",
+  "/api/panel/next",
+  "/api/panel/walkin",
+  "/api/panel/session/start",
+  "/api/panel/session/close",
+  "/api/panel/session/reopen",
+  "/api/panel/undo",
+  "/api/panel/login",
+  "/api/panel/entries/some-uuid/arrived",
+  "/api/healthz",
+];
+
+for (const p of proxyApiPaths) {
+  assert(
+    shouldPassToNetwork(p, SW_HOST, SW_HOST),
+    `FAIL: SW intercepted proxy-mode path ${p} — /api/* must never be cached`,
+  );
+}
+
+const apiPaths = [...directApiPaths, ...proxyApiPaths];
 
 // --- Cross-origin (backend on different host): MUST pass through ----------
 assert(
@@ -75,6 +103,7 @@ for (const p of shellPaths) {
   );
 }
 
-console.log(`✓  ${apiPaths.length} API paths pass through — SW never caches /panel/* responses`);
+console.log(`✓  ${directApiPaths.length} direct-mode /panel/* paths pass through`);
+console.log(`✓  ${proxyApiPaths.length} proxy-mode /api/* paths pass through`);
 console.log(`✓  ${shellPaths.length} shell assets intercepted by SW`);
 console.log("✓  Cross-origin requests pass through");

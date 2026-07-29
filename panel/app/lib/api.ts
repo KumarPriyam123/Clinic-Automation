@@ -1,7 +1,10 @@
 import type { QueueSnapshot, SettingsPayload } from "./types";
 
+// Default: same-origin /api so a single ngrok tunnel on :3000 works out of the
+// box.  Set NEXT_PUBLIC_API_URL to an absolute backend URL (e.g. the droplet)
+// for Vercel production — that mode bypasses the Next.js proxy rewrite entirely.
 const BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "/api";
 const API = `${BASE}/panel`;
 
 const TOKEN_KEY = "clinicq.token";

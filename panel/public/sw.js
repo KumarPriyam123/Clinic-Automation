@@ -12,7 +12,7 @@
  * the stale shell immediately.  A stale cached bundle is indistinguishable from
  * live data and is a silent pilot-breaking failure (see WA_ROUNDTRIP.md).
  */
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 const CACHE = `clinicq-shell-${CACHE_VERSION}`;
 const SHELL = ["/", "/login", "/settings", "/manifest.webmanifest", "/icons/icon-192.png"];
 
@@ -37,11 +37,16 @@ self.addEventListener("activate", (event) => {
  * a real SW environment.
  *
  * Rules (in priority order):
- *  1. API calls on /panel/* — NEVER cache; stale queue data is worse than no data.
- *  2. Cross-origin requests — backend is on a different host; let it handle its own caching.
+ *  1. /api/* — proxy mode: same-origin rewrites from Next.js; must never cache.
+ *  2. /panel/* — direct mode: NEXT_PUBLIC_API_URL pointing at the backend.
+ *  3. Cross-origin — absolute backend URL; let the backend handle its own caching.
+ *
+ * Both /api/* and /panel/* must be listed.  In proxy mode the browser only
+ * ever sends /api/* (same-origin), so the cross-origin check would not fire.
  */
 function shouldPassToNetwork(pathname, requestHostname, swHostname) {
-  if (pathname.startsWith("/panel/")) return true;
+  if (pathname.startsWith("/api/")) return true;    // proxy mode
+  if (pathname.startsWith("/panel/")) return true;  // direct mode
   if (requestHostname !== swHostname) return true;
   return false;
 }
