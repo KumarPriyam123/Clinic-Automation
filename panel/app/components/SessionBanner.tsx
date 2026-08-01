@@ -2,7 +2,7 @@
 
 import { clock } from "../lib/format";
 import { STRINGS } from "../lib/i18n";
-import type { SessionMeta, SessionListItem } from "../lib/types";
+import type { SessionMeta, SessionListItem, Upcoming } from "../lib/types";
 
 const SESSION_HI: Record<string, string> = { morning: "सुबह", evening: "शाम" };
 
@@ -25,16 +25,46 @@ const STATUS_HI: Record<string, string> = {
 export function SessionBanner({
   session,
   sessions,
+  upcoming,
+  day,
+  today,
   onSwitch,
+  onDay,
 }: {
   session: SessionMeta;
   sessions?: SessionListItem[];
+  upcoming?: Upcoming;
+  /** Day currently in view, ISO "YYYY-MM-DD" (IST). */
+  day: string;
+  today: string;
   onSwitch: (id: string) => void;
+  onDay: (date: string) => void;
 }) {
   const label = SESSION_HI[session.name] ?? session.name;
   const avgMin = Math.round(session.avg_consult_s / 60);
+  const viewingToday = day === today;
+  // Show the day tabs whenever there is something to switch to: bookings
+  // already sitting in tomorrow's queue, or the receptionist is over there.
+  const showDays = !viewingToday || (upcoming?.count ?? 0) > 0;
+
   return (
     <header className="rounded-xl2 bg-surface p-4 shadow-card">
+      {showDays && (
+        <div className="mb-3 flex items-center gap-2">
+          <DayTab
+            active={viewingToday}
+            label={STRINGS.today.hi}
+            onClick={() => onDay(today)}
+          />
+          <DayTab
+            active={!viewingToday}
+            label={STRINGS.tomorrow.hi}
+            badge={upcoming?.count}
+            onClick={() => upcoming && onDay(upcoming.date)}
+          />
+        </div>
+      )}
+
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -55,6 +85,15 @@ export function SessionBanner({
           <Stat value={`${avgMin}′`} label={STRINGS.avg.hi} tone="muted" />
         </div>
       </div>
+
+      {/* A future day is a preview: you cannot serve a patient who has not
+          been called yet, so every mutating control is disabled, not hidden. */}
+      {session.read_only && (
+        <p className="mt-3 rounded-xl bg-booked-bg px-3 py-2 text-sm font-semibold text-booked-fg">
+          👁 {STRINGS.viewOnly.hi}
+          <span className="block text-xs font-medium opacity-80">{STRINGS.viewOnly.en}</span>
+        </p>
+      )}
 
       {sessions && sessions.length > 1 && (
         <div className="no-scrollbar mt-3 flex gap-2 overflow-x-auto">
@@ -77,6 +116,38 @@ export function SessionBanner({
         </div>
       )}
     </header>
+  );
+}
+
+function DayTab({
+  active,
+  label,
+  badge,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  badge?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex min-h-touch flex-1 items-center justify-center gap-1.5 rounded-xl px-3 text-[15px] font-bold transition ${
+        active ? "bg-primary text-white" : "border border-line bg-canvas text-muted"
+      }`}
+    >
+      {label}
+      {badge !== undefined && badge > 0 && (
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-bold tabular-nums ${
+            active ? "bg-white/25 text-white" : "bg-primary text-white"
+          }`}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }
 

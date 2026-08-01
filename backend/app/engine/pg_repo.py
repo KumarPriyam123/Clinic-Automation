@@ -239,7 +239,7 @@ class PgRepo:
     ) -> list[SessionRef]:
         rows = await self._con.fetch(
             """
-            select s.id, s.name, s.date, s.token_cap,
+            select s.id, s.name, s.date, s.start_at, s.end_at, s.token_cap,
                    coalesce(count(q.*) filter (where q.status <> all($3::text[])), 0) as issued
             from sessions s
             left join queue_entries q on q.session_id = s.id
@@ -249,7 +249,7 @@ class PgRepo:
             group by s.id
             having s.token_cap - coalesce(
                      count(q.*) filter (where q.status <> all($3::text[])), 0) > 0
-            order by s.date
+            order by s.date, s.start_at
             """,
             clinic_id,
             after + STOP_ISSUING_BUFFER,
@@ -261,6 +261,8 @@ class PgRepo:
                 name=r["name"],
                 date=r["date"],
                 free=r["token_cap"] - r["issued"],
+                start_at=r["start_at"],
+                end_at=r["end_at"],
             )
             for r in rows
         ]

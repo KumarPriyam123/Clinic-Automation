@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 from collections.abc import Awaitable, Callable
+from datetime import date as _date
 from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -42,6 +43,12 @@ class SessionInfo:
     id: UUID
     name: str
     free: int
+    #: The session's own window. The flow stashes it in conversation context so
+    #: a bare "11:30" can be resolved against the day the patient actually
+    #: picked, not against today. Optional so older callers keep working.
+    date: _date | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
 
 
 @dc.dataclass(slots=True)
@@ -142,7 +149,20 @@ class MemConvo:
             )
             free = s.token_cap - issued
             if free > 0:
-                out.append(SessionInfo(id=s.id, name=s.name, free=free))
+                out.append(
+                    SessionInfo(
+                        id=s.id,
+                        name=s.name,
+                        free=free,
+                        date=s.date,
+                        start_at=s.start_at,
+                        end_at=s.end_at,
+                    )
+                )
+        # same order the Pg backend returns: earliest day/slot first
+        out.sort(
+            key=lambda si: (si.date or _date.min, si.start_at.timestamp() if si.start_at else 0.0)
+        )
         return out
 
     async def get_or_create_patient(
@@ -262,7 +282,7 @@ class PgConvo:
         async with db.get_pool().acquire() as con:
             rows = await con.fetch(
                 """
-                select s.id, s.name,
+                select s.id, s.name, s.date, s.start_at, s.end_at,
                        s.token_cap - coalesce(
                          count(q.*) filter (where q.status <> all($4::text[])), 0) as free
                 from sessions s
@@ -279,7 +299,17 @@ class PgConvo:
                 horizon,
                 _RELEASED_VALUES,
             )
-        return [SessionInfo(r["id"], r["name"], r["free"]) for r in rows]
+        return [
+            SessionInfo(
+                id=r["id"],
+                name=r["name"],
+                free=r["free"],
+                date=r["date"],
+                start_at=r["start_at"],
+                end_at=r["end_at"],
+            )
+            for r in rows
+        ]
 
     async def get_or_create_patient(
         self, clinic_id: UUID, wa_number: str, profile_name: str

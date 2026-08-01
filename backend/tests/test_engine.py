@@ -334,3 +334,93 @@ def test_t17_close_expires_pending_persists_avg():
     assert s.status == SessionStatus.closed
     assert s.avg_consult_s == 474
     assert any(n.type == engine.NotificationType.expired_rebook for n in res.notifications)
+
+
+# --------------------------------------------------------------------------- #
+# A session whose end_at has passed cannot be made live again.
+#
+# The 60s sweep closes every open/paused session past its end_at — that is
+# correct and stays. What was wrong is that the panel *accepted* a reopen on
+# such a session, showed success, and then the sweep silently undid it a minute
+# later, so the button looked broken.
+# --------------------------------------------------------------------------- #
+def test_reopen_rejects_a_session_whose_time_has_passed():
+    repo = MemRepo()
+    s = open_session(repo, dt(9), end=dt(13))
+    run(engine.close_session(repo, dt(13), s.id))
+    assert s.status == SessionStatus.closed
+    with pytest.raises(engine.SessionEnded):
+        run(engine.reopen_session(repo, dt(13, 5), s.id))
+    assert s.status == SessionStatus.closed  # and nothing was half-applied
+
+
+def test_reopen_still_works_before_end_at():
+    """A genuine mis-tap mid-session must still be recoverable."""
+    repo = MemRepo()
+    s = open_session(repo, dt(9), end=dt(13))
+    run(engine.close_session(repo, dt(11), s.id))
+    run(engine.reopen_session(repo, dt(11, 1), s.id))
+    assert s.status == SessionStatus.open
+
+
+def test_start_and_resume_reject_a_session_whose_time_has_passed():
+    repo = MemRepo()
+    s = open_session(repo, dt(9), end=dt(13))
+    s.status = SessionStatus.scheduled
+    with pytest.raises(engine.SessionEnded):
+        run(engine.open_session(repo, dt(13, 5), s.id))
+    s.status = SessionStatus.paused
+    with pytest.raises(engine.SessionEnded):
+        run(engine.resume_session(repo, dt(13, 5), s.id))
+
+
+def test_sweep_close_still_wins_after_end_at():
+    """Guard rails added above must not weaken the auto-close itself."""
+    repo = MemRepo()
+    s = open_session(repo, dt(9), end=dt(13))
+    run(engine.close_session(repo, dt(13), s.id))
+    assert s.status == SessionStatus.closed
+
+
+# --------------------------------------------------------------------------- #
+# book() reports what it granted, so the patient can be told (rule 1 clamp is
+# correct; applying it silently is what breaks trust).
+# --------------------------------------------------------------------------- #
+def test_booking_info_flags_a_clamp_to_the_session_start():
+    repo = MemRepo()
+    s = open_session(repo, dt(10), end=dt(16))  # starts at 10:00
+    p = patient(repo, s.clinic_id, 1)
+    res = do_book(repo, s, p, dt(9), req=dt(8))  # asked 08:00, session opens 10:00
+    assert res.booking.adjust_reason == "session_start"
+    assert res.booking.requested == dt(8)
+    assert res.booking.granted == dt(10)
+    assert res.booking.session_date == dt(10).date()
+
+
+def test_booking_info_flags_a_pull_to_now_mid_session():
+    repo = MemRepo()
+    s = open_session(repo, dt(9), end=dt(16))
+    p = patient(repo, s.clinic_id, 1)
+    res = do_book(repo, s, p, dt(11), req=dt(9, 30))  # that slot is long gone
+    assert res.booking.adjust_reason == "now"
+    assert res.booking.granted == dt(11)
+
+
+def test_booking_info_is_silent_when_nothing_moved():
+    repo = MemRepo()
+    s = open_session(repo, dt(9), end=dt(16))
+    p1, p2 = patient(repo, s.clinic_id, 1), patient(repo, s.clinic_id, 2)
+    on_time = do_book(repo, s, p1, dt(9), req=dt(11))
+    assert on_time.booking.adjust_reason is None
+    asap = do_book(repo, s, p2, dt(9), req=None)
+    assert asap.booking.adjust_reason is None and asap.booking.requested is None
+
+
+def test_booking_info_ignores_a_move_under_ten_minutes():
+    """Don't nag about a 5-minute shift — only a material one."""
+    repo = MemRepo()
+    s = open_session(repo, dt(10), end=dt(16))
+    p = patient(repo, s.clinic_id, 1)
+    res = do_book(repo, s, p, dt(9), req=dt(9, 55))
+    assert res.booking.granted == dt(10)
+    assert res.booking.adjust_reason is None

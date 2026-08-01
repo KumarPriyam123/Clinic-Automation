@@ -35,6 +35,9 @@ class SessionMetaOut(BaseModel):
     served: int
     waiting: int
     allowed_actions: list[str]
+    #: True for any day but today — the panel disables every mutating control
+    #: and the routes reject mutations server-side.
+    read_only: bool
 
 
 class NowServingOut(BaseModel):
@@ -65,8 +68,17 @@ class SessionListItemOut(BaseModel):
     id: str
     name: str
     status: str
+    date: str
     start_at: str | None
     end_at: str | None
+
+
+class UpcomingOut(BaseModel):
+    """Bookings already sitting in tomorrow's queue (the after-hours capture)."""
+
+    model_config = _forbid
+    date: str
+    count: int
 
 
 class QueueSnapshot(BaseModel):
@@ -75,4 +87,5 @@ class QueueSnapshot(BaseModel):
     now_serving: NowServingOut | None
     entries: list[QueueEntryOut]
     sessions: list[SessionListItemOut] | None = None
+    upcoming: UpcomingOut | None = None
     can_undo: bool | None = None

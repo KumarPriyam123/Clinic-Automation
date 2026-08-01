@@ -14,12 +14,15 @@ from __future__ import annotations
 import dataclasses as dc
 import json
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.config import settings
 
 log = logging.getLogger("clinicq.llm")
+IST = ZoneInfo("Asia/Kolkata")
 
 VALID_INTENTS = {
     "book",
@@ -46,19 +49,39 @@ _SYSTEM_BASE = (
     "If unsure => intent 'other' with low confidence."
 )
 
-_SESSION_HINT = (
-    " The patient has chosen the {session_name!r} session. "
-    "Resolve ambiguous bare hours against this window: "
-    "'morning' sessions run in AM (e.g. '8 baje' => 08:00), "
-    "'evening' sessions run in PM (e.g. '8 baje' => 20:00)."
+_SESSION_HINT = " The patient has chosen the {session_name!r} session."
+
+#: The real window beats the session's *name*: a clinic may call its evening
+#: session anything at all, and 'morning'/'evening' may not appear in it. The
+#: authoritative disambiguation is done in code (convo/timeparse.py) against
+#: this same window — this hint only helps the model land closer first time.
+_WINDOW_HINT = (
+    " That session runs {start}–{end} local time; prefer a reading of any bare "
+    "hour that falls inside it (e.g. '11:30' in a 17:00-23:30 session => 23:30)."
 )
 
 
 def _build_system(context: dict) -> str:
+    out = _SYSTEM_BASE
     sn = context.get("session_name", "")
     if sn:
-        return _SYSTEM_BASE + _SESSION_HINT.format(session_name=sn)
-    return _SYSTEM_BASE
+        out += _SESSION_HINT.format(session_name=sn)
+    span = _window_span(context.get("session_window"))
+    if span:
+        out += _WINDOW_HINT.format(start=span[0], end=span[1])
+    return out
+
+
+def _window_span(meta: dict | None) -> tuple[str, str] | None:
+    """('HH:MM', 'HH:MM') in IST from the context window, or None."""
+    if not meta:
+        return None
+    try:
+        start = datetime.fromisoformat(meta["start_at"]).astimezone(IST)
+        end = datetime.fromisoformat(meta["end_at"]).astimezone(IST)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return start.strftime("%H:%M"), end.strftime("%H:%M")
 
 
 @dc.dataclass(slots=True)

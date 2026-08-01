@@ -138,6 +138,10 @@
     "SessionListItemOut": {
       "additionalProperties": false,
       "properties": {
+        "date": {
+          "title": "Date",
+          "type": "string"
+        },
         "end_at": {
           "anyOf": [
             {
@@ -177,6 +181,7 @@
         "id",
         "name",
         "status",
+        "date",
         "start_at",
         "end_at"
       ],
@@ -231,6 +236,10 @@
           "title": "Name",
           "type": "string"
         },
+        "read_only": {
+          "title": "Read Only",
+          "type": "boolean"
+        },
         "served": {
           "title": "Served",
           "type": "integer"
@@ -271,9 +280,30 @@
         "doctor_free_at",
         "served",
         "waiting",
-        "allowed_actions"
+        "allowed_actions",
+        "read_only"
       ],
       "title": "SessionMetaOut",
+      "type": "object"
+    },
+    "UpcomingOut": {
+      "additionalProperties": false,
+      "description": "Bookings already sitting in tomorrow's queue (the after-hours capture).",
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "date": {
+          "title": "Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "date",
+        "count"
+      ],
+      "title": "UpcomingOut",
       "type": "object"
     }
   },
@@ -332,6 +362,17 @@
       ],
       "default": null,
       "title": "Sessions"
+    },
+    "upcoming": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UpcomingOut"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

@@ -89,6 +89,9 @@ export async function login(slug: string, pin: string): Promise<ClinicInfo> {
 
 // --- queue --------------------------------------------------------------- //
 export const fetchToday = () => request<QueueSnapshot>("/session/today");
+/** Any single day (ISO "YYYY-MM-DD"). Days other than today come back read_only. */
+export const fetchDay = (date: string) =>
+  request<QueueSnapshot>(`/session/day?date=${date}`);
 export const fetchQueue = (sessionId: string) =>
   request<QueueSnapshot>(`/queue?session_id=${sessionId}`);
 

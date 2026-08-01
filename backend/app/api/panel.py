@@ -17,7 +17,8 @@ Design notes
 from __future__ import annotations
 
 import time as _time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from datetime import date as dt_date
 from datetime import time as dt_time
 from typing import Any
 from uuid import UUID, uuid4
@@ -29,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app import db, engine
 from app.api.security import Clinic, CurrentClinic, encode_token
+from app.engine.errors import InvalidTransition, SessionEnded
 from app.engine.pg_repo import PgRepo
 from app.models import Source
 from app.wa.notify import NotificationDispatcher
@@ -140,11 +142,14 @@ def _iso(dt: datetime | None) -> str | None:
 # snapshot (undo) helpers
 # --------------------------------------------------------------------------- #
 async def _read_snapshot(con: Any, session_id: UUID) -> dict:
+    # `date` is read for the today-only mutation guard; _restore never writes it.
     s = await con.fetchrow(
-        "select id, status, doctor_free_at, avg_consult_s, consults_done "
+        "select id, status, doctor_free_at, avg_consult_s, consults_done, date "
         "from sessions where id = $1",
         session_id,
     )
+    if s is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
     rows = await con.fetch("select * from queue_entries where session_id = $1", session_id)
     return {"session": dict(s), "entries": {r["id"]: dict(r) for r in rows}}
 
@@ -179,6 +184,10 @@ async def _restore(con: Any, snap: dict) -> None:
 async def _session_row(con: Any, session_id: UUID) -> dict | None:
     r = await con.fetchrow("select * from sessions where id = $1", session_id)
     return dict(r) if r else None
+
+
+def _today_ist() -> dt_date:
+    return datetime.now(IST).date()
 
 
 async def _queue_snapshot(con: Any, session: dict) -> dict:
@@ -228,6 +237,11 @@ async def _queue_snapshot(con: Any, session: dict) -> dict:
             }
         else:
             entries.append(item)
+    # A session on any day but today is a preview: you cannot serve, admit or
+    # mark present a patient in a session that has not arrived yet. The panel
+    # renders the same controls disabled so the reason is obvious, and the
+    # mutating routes reject it server-side (see _mutate).
+    read_only = session["date"] != _today_ist()
     return {
         "session": {
             "id": str(session["id"]),
@@ -241,7 +255,8 @@ async def _queue_snapshot(con: Any, session: dict) -> dict:
             "doctor_free_at": _iso(session["doctor_free_at"]),
             "served": served,
             "waiting": waiting,
-            "allowed_actions": _ALLOWED_ACTIONS.get(session["status"], []),
+            "allowed_actions": [] if read_only else _ALLOWED_ACTIONS.get(session["status"], []),
+            "read_only": read_only,
         },
         "now_serving": now_serving,
         "entries": entries,
@@ -264,7 +279,34 @@ async def _mutate(session_id: UUID, factory: Any) -> tuple[engine.EngineResult, 
     pool = db.get_pool()
     async with pool.acquire() as con, con.transaction():
         snap = await _read_snapshot(con, session_id)
-        result = await factory(PgRepo(con))
+        day = snap["session"]["date"]
+        if day is not None and day != _today_ist():
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason": "not_today",
+                    "message": "यह सत्र आज का नहीं है — सिर्फ़ देख सकते हैं / "
+                    "future session — view only",
+                },
+            )
+        try:
+            result = await factory(PgRepo(con))
+        except SessionEnded:
+            # The 60s sweep would close this again within the minute; accepting
+            # it would look like the button silently did nothing.
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason": "session_ended",
+                    "message": "यह सत्र का समय बीत चुका है — कल का सत्र अपने आप खुलेगा / "
+                    "this session's time has passed; tomorrow's opens automatically",
+                },
+            ) from None
+        except InvalidTransition as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {"reason": "invalid_transition", "message": f"अभी यह नहीं हो सकता / {exc}"},
+            ) from None
     return result, snap
 
 
@@ -281,14 +323,34 @@ async def _finish(
 # --------------------------------------------------------------------------- #
 # session selection
 # --------------------------------------------------------------------------- #
-async def _today_sessions(con: Any, clinic_id: UUID) -> list[dict]:
-    today = datetime.now(IST).date()
+async def _sessions_on(con: Any, clinic_id: UUID, day: dt_date) -> list[dict]:
     rows = await con.fetch(
         "select * from sessions where clinic_id = $1 and date = $2 order by start_at",
         clinic_id,
-        today,
+        day,
     )
     return [dict(r) for r in rows]
+
+
+async def _upcoming(con: Any, clinic_id: UUID, day: dt_date) -> dict:
+    """How many patients are already booked for `day`.
+
+    After-hours bookings are a core selling point — the phone line would have
+    lost them — but a receptionist arriving in the morning has no way to see
+    what came in overnight unless the live queue says so.
+    """
+    n = await con.fetchval(
+        """
+        select count(*)
+        from queue_entries q
+        join sessions s on s.id = q.session_id
+        where s.clinic_id = $1 and s.date = $2 and q.status = any($3::text[])
+        """,
+        clinic_id,
+        day,
+        list(_ACTIVE),
+    )
+    return {"date": day.isoformat(), "count": n or 0}
 
 
 def _pick_current(sessions: list[dict], now: datetime) -> dict | None:
@@ -348,26 +410,48 @@ async def login(body: LoginBody) -> dict:
 # --------------------------------------------------------------------------- #
 # reads
 # --------------------------------------------------------------------------- #
-@router.get("/session/today")
-async def session_today(clinic: Clinic = CurrentClinic) -> dict:
-    pool = db.get_pool()
-    async with pool.acquire() as con:
-        sessions = await _today_sessions(con, clinic.id)
-        current = _pick_current(sessions, _now())
-        if current is None:
-            return {"session": None, "now_serving": None, "entries": [], "sessions": []}
-        body = await _queue_snapshot(con, current)
-    body["sessions"] = [
+def _session_list(sessions: list[dict]) -> list[dict]:
+    return [
         {
             "id": str(s["id"]),
             "name": s["name"],
             "status": s["status"],
+            "date": s["date"].isoformat(),
             "start_at": _iso(s["start_at"]),
             "end_at": _iso(s["end_at"]),
         }
         for s in sessions
     ]
+
+
+async def _day_response(clinic_id: UUID, day: dt_date) -> dict:
+    """Queue snapshot for one day + that day's session list + tomorrow's count."""
+    pool = db.get_pool()
+    today = _today_ist()
+    async with pool.acquire() as con:
+        sessions = await _sessions_on(con, clinic_id, day)
+        upcoming = await _upcoming(con, clinic_id, today + timedelta(days=1))
+        if not sessions:
+            body: dict = {"session": None, "now_serving": None, "entries": []}
+        else:
+            current = _pick_current(sessions, _now()) if day == today else sessions[0]
+            body = await _queue_snapshot(con, current)
+    body["sessions"] = _session_list(sessions)
+    body["upcoming"] = upcoming
     return body
+
+
+@router.get("/session/today")
+async def session_today(clinic: Clinic = CurrentClinic) -> dict:
+    return await _day_response(clinic.id, _today_ist())
+
+
+@router.get("/session/day")
+async def session_day(
+    day: dt_date = Query(..., alias="date"), clinic: Clinic = CurrentClinic
+) -> dict:
+    """Any single day's queue. Days other than today come back read_only."""
+    return await _day_response(clinic.id, day)
 
 
 @router.get("/queue")

@@ -148,7 +148,16 @@ class MemRepo:
             )
             free = s.token_cap - issued
             if free > 0:
-                out.append(SessionRef(session_id=s.id, name=s.name, date=s.date, free=free))
+                out.append(
+                    SessionRef(
+                        session_id=s.id,
+                        name=s.name,
+                        date=s.date,
+                        free=free,
+                        start_at=s.start_at,
+                        end_at=s.end_at,
+                    )
+                )
         return sorted(out, key=lambda r: r.date)
 
     async def open_sessions(self) -> list[SessionState]:

@@ -15,6 +15,18 @@ export const STRINGS = {
   enter: { hi: "अंदर जाएँ", en: "Enter" },
   wrongPin: { hi: "गलत कोड या PIN", en: "Wrong code or PIN" },
 
+  today: { hi: "आज", en: "Today" },
+  tomorrow: { hi: "कल", en: "Tomorrow" },
+  viewOnly: {
+    hi: "यह कल का सत्र है — सिर्फ़ देख सकते हैं",
+    en: "Future session — view only",
+  },
+  noSessionThatDay: { hi: "उस दिन कोई सत्र नहीं", en: "No session that day" },
+  sessionTimePassed: {
+    hi: "यह सत्र का समय बीत चुका है — कल का सत्र अपने आप खुलेगा",
+    en: "This session's time has passed — tomorrow's opens automatically",
+  },
+
   nowServing: { hi: "अभी अंदर", en: "Now serving" },
   noneServing: { hi: "कोई अंदर नहीं", en: "Nobody in consult" },
   next: { hi: "अगला बुलाएँ", en: "Call next" },

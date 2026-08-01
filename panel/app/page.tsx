@@ -7,7 +7,7 @@ import * as api from "./lib/api";
 import { getClinic, getToken } from "./lib/api";
 import { STRINGS } from "./lib/i18n";
 import { armSound } from "./lib/sound";
-import { useQueue, useTick } from "./lib/useQueue";
+import { todayIST, useQueue, useTick } from "./lib/useQueue";
 import type { QueueEntry, QueueSnapshot } from "./lib/types";
 import { SessionBanner } from "./components/SessionBanner";
 import { NowServing } from "./components/NowServing";
@@ -39,6 +39,11 @@ export default function LiveQueue() {
   const session = q.snap?.session ?? null;
   const sid = session?.id ?? q.sessionId ?? null;
   const isOpen = session?.status === "open";
+  const today = todayIST();
+  // A future day is a read-only preview — you cannot serve, admit or mark
+  // present a patient in a session that has not happened yet. Controls stay
+  // visible but disabled so the reason is obvious.
+  const readOnly = session?.read_only ?? false;
 
   // Stale-data guard: if we've been offline for >10min, hide the queue entirely.
   // A receptionist must never act on data that old.
@@ -47,7 +52,8 @@ export default function LiveQueue() {
   // First-load offline (never had a response): show reconnect bar, not stale banner.
   const isFirstLoadOffline = q.offline && q.lastLiveAt === null && !q.loading;
 
-  const locked = q.offline; // disables all mutating controls while offline
+  // disables all mutating controls: offline, or previewing a future day
+  const locked = q.offline || readOnly;
 
   async function hardReload() {
     if ("serviceWorker" in navigator) {
@@ -128,7 +134,11 @@ export default function LiveQueue() {
             <SessionBanner
               session={session}
               sessions={q.snap?.sessions}
+              upcoming={q.snap?.upcoming}
+              day={q.day}
+              today={today}
               onSwitch={(id) => q.setSessionId(id)}
+              onDay={q.setDay}
             />
             <NowServing serving={q.snap?.now_serving ?? null} now={now} />
 
@@ -161,10 +171,27 @@ export default function LiveQueue() {
               )}
             </section>
           </div>
+        ) : q.day !== today ? (
+          /* Previewing a day that has no session — always offer the way back. */
+          <div className="mt-16 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
+            <p className="text-lg font-semibold text-ink">{STRINGS.noSessionThatDay.hi}</p>
+            <p className="mt-1 text-sm text-muted">{STRINGS.noSessionThatDay.en}</p>
+            <button className="btn-primary mt-5 h-touch px-6" onClick={() => q.setDay(today)}>
+              ← {STRINGS.today.hi}
+            </button>
+          </div>
         ) : (
           <div className="mt-16 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
             <p className="text-lg font-semibold text-ink">आज कोई सत्र नहीं</p>
             <p className="mt-1 text-sm text-muted">No session scheduled today</p>
+            {(q.snap?.upcoming?.count ?? 0) > 0 && (
+              <button
+                className="btn-primary mt-5 h-touch px-6"
+                onClick={() => q.snap?.upcoming && q.setDay(q.snap.upcoming.date)}
+              >
+                {STRINGS.tomorrow.hi}: {q.snap?.upcoming?.count} →
+              </button>
+            )}
             <Link href="/settings" className="btn-ghost mt-5 inline-flex">
               {STRINGS.settings.hi} →
             </Link>

@@ -13,15 +13,16 @@ from __future__ import annotations
 import dataclasses as dc
 import re
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from app import engine
+from app.convo import timeparse
 from app.convo.llm import Intent
 from app.convo.store import ConvoBackend, ConvState
 from app.models import Source
-from app.wa.notify import NotificationDispatcher, fmt_time
+from app.wa.notify import NotificationDispatcher, fmt_date, fmt_time
 from app.wa.sender import Sender
 from app.wa.templates import (
     BTN_ASAP,
@@ -31,6 +32,7 @@ from app.wa.templates import (
     BTN_SELF,
     btn,
     prompt,
+    session_label,
 )
 from app.wa.webhook import InboundMessage
 
@@ -73,13 +75,73 @@ def _is_cancel_kw(low: str) -> bool:
     return low.startswith("cancel") or "रद्द" in low
 
 
-def _req_from(now: datetime, hhmm: str) -> datetime | None:
-    try:
-        h, m = (int(x) for x in hhmm.split(":"))
-    except (ValueError, AttributeError):
+def _window(st: ConvState) -> timeparse.Window | None:
+    """The chosen session's window, if the patient has picked one."""
+    return timeparse.window_from(st.context.get("session_window"))
+
+
+def _session_meta(s) -> dict:
+    """JSON-safe {name, date, start_at, end_at} for conversation context.
+
+    Works for both SessionInfo (first choice) and SessionRef (overflow
+    alternative); either may lack the window on an older row, hence the guards.
+    """
+    meta: dict = {"name": s.name}
+    if getattr(s, "date", None) is not None:
+        meta["date"] = s.date.isoformat()
+    if getattr(s, "start_at", None) is not None:
+        meta["start_at"] = s.start_at.isoformat()
+    if getattr(s, "end_at", None) is not None:
+        meta["end_at"] = s.end_at.isoformat()
+    return meta
+
+
+def _booking_notice(now: datetime, lang: str, info) -> str | None:
+    """Everything the patient did not ask for, stated plainly — or None.
+
+    Two independent facts, either or both of which may apply:
+      * the booking is not for today (a token issued at 11 PM for tomorrow
+        evening otherwise looks like tonight),
+      * the granted time had to move more than 10 min from the request.
+    """
+    if info is None:
         return None
-    ist = now.astimezone(IST).replace(hour=h, minute=m, second=0, microsecond=0)
-    return ist.astimezone(UTC)
+    lines: list[str] = []
+    today = now.astimezone(IST).date()
+    if info.session_date != today:
+        key = (
+            "booking_day_tomorrow"
+            if info.session_date == today + timedelta(days=1)
+            else "booking_day_other"
+        )
+        lines.append(
+            prompt(
+                key,
+                lang,
+                date=fmt_date(info.session_date),
+                session=session_label(info.session_name, lang),
+            )
+        )
+    if info.adjust_reason == "session_start":
+        lines.append(
+            prompt(
+                "adjusted_to_start",
+                lang,
+                requested=fmt_time(info.requested),
+                start=fmt_time(info.session_start),
+            )
+        )
+    elif info.adjust_reason == "now":
+        lines.append(prompt("adjusted_to_now", lang, requested=fmt_time(info.requested)))
+    return "\n".join(lines) if lines else None
+
+
+def _slots_line(lang: str, free: int, day, today) -> str:
+    """List-row description. Non-today sessions carry the date, so 'evening'
+    tomorrow is never mistaken for 'evening' tonight."""
+    if day is None or day == today:
+        return prompt("slots_left", lang, free=free)
+    return prompt("slots_left_on", lang, free=free, date=fmt_date(day))
 
 
 @dc.dataclass(slots=True)
@@ -131,6 +193,7 @@ class Flow:
             {
                 "state": st.state,
                 "session_name": st.context.get("session_name", ""),
+                "session_window": st.context.get("session_window"),
             },
         )
         if intent.confidence < 0.7:
@@ -138,17 +201,22 @@ class Flow:
 
         # in choosing_time, a typed specific time advances to profile
         if st.state == "choosing_time" and intent.time_pref:
-            st.context["requested"] = intent.time_pref
-            return await self._offer_profiles(now, clinic, wa, lang, st)
+            return await self._accept_time(now, clinic, wa, lang, st, intent.time_pref, text)
 
-        return await self._route(now, clinic, wa, lang, st, intent, first)
+        return await self._route(now, clinic, wa, lang, st, intent, first, text)
 
     # --- intent routing -------------------------------------------------- #
-    async def _route(self, now, clinic, wa, lang, st, intent: Intent, first: bool) -> None:
+    async def _route(
+        self, now, clinic, wa, lang, st, intent: Intent, first: bool, text: str
+    ) -> None:
         i = intent.intent
         if i in ("book", "greeting", "reschedule"):
             if intent.time_pref:
+                # Held raw: it can only be resolved once we know which session
+                # (and therefore which day and window) the patient picks.
                 st.context["requested"] = intent.time_pref
+                st.context["requested_text"] = text
+                st.context.pop("requested_at", None)
             return await self._offer_sessions(now, clinic, wa, lang, st, first)
         if i == "status":
             return await self._status(now, clinic, wa, lang)
@@ -165,13 +233,33 @@ class Flow:
         prefix, _, arg = button_id.partition(":")
         if prefix == "sess":
             st.context["session_id"] = arg
-            # Recover session name from map saved by _offer_sessions so LLM gets context
-            name = (st.context.get("_session_names") or {}).get(arg, "")
-            if name:
-                st.context["session_name"] = name
+            # Recover the session's name AND window from the map saved by
+            # _offer_sessions: the window is what makes a bare "11:30"
+            # resolvable, and the day is what the confirmation must state.
+            meta = (st.context.get("_sessions") or {}).get(arg)
+            if meta:
+                st.context["session_name"] = meta.get("name", "")
+                st.context["session_window"] = {
+                    k: meta[k] for k in ("date", "start_at", "end_at") if k in meta
+                }
+            else:
+                # conversation started before windows were stashed — degrade
+                name = (st.context.get("_session_names") or {}).get(arg, "")
+                if name:
+                    st.context["session_name"] = name
+                st.context.pop("session_window", None)
+            # A time stated before the session was chosen ("kal subah 10 baje")
+            # can only be resolved now. Honour it instead of asking again.
+            pending = st.context.get("requested")
+            if pending and pending != "asap":
+                return await self._accept_time(
+                    now, clinic, wa, lang, st, pending, st.context.get("requested_text") or ""
+                )
             return await self._offer_time(now, clinic, wa, lang, st)
         if prefix == "time":  # time:asap
             st.context["requested"] = "asap"
+            st.context.pop("requested_at", None)
+            st.context.pop("requested_text", None)
             return await self._offer_profiles(now, clinic, wa, lang, st)
         if prefix == "profile":
             if arg == "family":
@@ -202,11 +290,19 @@ class Flow:
         if not sessions:
             await self._say(now, clinic.id, wa, prompt("no_sessions", lang), first=first)
             return
+        today = now.astimezone(IST).date()
         rows = [
-            {"id": f"sess:{s.id}", "title": s.name, "description": f"{s.free} slots"}
+            {
+                "id": f"sess:{s.id}",
+                "title": session_label(s.name, lang),
+                "description": _slots_line(lang, s.free, s.date, today),
+            }
             for s in sessions
         ]
-        # Save session_id→name map so _button can recover the name for LLM context
+        # Save session_id → {name, window} so _button can recover both: the name
+        # for LLM context, the window for resolving a typed time to the right
+        # day. _session_names is kept for conversations already in flight.
+        st.context["_sessions"] = {str(s.id): _session_meta(s) for s in sessions}
         st.context["_session_names"] = {str(s.id): s.name for s in sessions}
         body = prompt("choose_session", lang)
         if first:
@@ -228,6 +324,44 @@ class Flow:
         st.state = "choosing_time"
         await self.backend.save_conversation(wa, clinic.id, st)
 
+    async def _accept_time(self, now, clinic, wa, lang, st, hhmm: str, text: str) -> None:
+        """Resolve a typed time against the chosen session, or re-ask.
+
+        The LLM's HH:MM is only a 12-hour hint — see convo/timeparse.py. When
+        neither reading fits the session we re-ask rather than clamp, because
+        silently handing someone a time five hours from what they typed is the
+        single worst trust failure in this flow.
+        """
+        res = timeparse.resolve(
+            now, hhmm, explicit=timeparse.has_meridiem(text), window=_window(st)
+        )
+        if res.outcome is timeparse.Outcome.invalid:
+            return await self._low_confidence(now, clinic, wa, lang, st)
+        if res.outcome is timeparse.Outcome.out_of_window:
+            return await self._reask_time(now, clinic, wa, lang, st)
+        st.context["requested"] = hhmm
+        st.context["requested_text"] = text
+        st.context["requested_at"] = res.at.isoformat()
+        return await self._offer_profiles(now, clinic, wa, lang, st)
+
+    async def _reask_time(self, now, clinic, wa, lang, st) -> None:
+        """Tell the patient the window and ask again — never a silent clamp."""
+        win = _window(st)
+        await self._say(
+            now,
+            clinic.id,
+            wa,
+            prompt(
+                "time_out_of_window",
+                lang,
+                start=fmt_time(win.start_at) if win else "",
+                end=fmt_time(win.end_at) if win else "",
+            ),
+        )
+        for key in ("requested", "requested_at", "requested_text"):
+            st.context.pop(key, None)
+        await self._offer_time(now, clinic, wa, lang, st)
+
     async def _offer_profiles(self, now, clinic, wa, lang, st) -> None:
         await self.sender.send_buttons(
             now,
@@ -243,7 +377,22 @@ class Flow:
     async def _book(self, now, clinic, wa, lang, st, *, profile_name: str) -> None:
         session_id = UUID(st.context["session_id"])
         requested = st.context.get("requested")
-        req_dt = None if requested in (None, "asap") else _req_from(now, requested)
+        req_dt: datetime | None = None
+        if requested not in (None, "asap"):
+            iso = st.context.get("requested_at")
+            if iso:
+                req_dt = datetime.fromisoformat(iso)
+            else:
+                # Not resolved earlier (stale context / older conversation).
+                res = timeparse.resolve(
+                    now,
+                    requested,
+                    explicit=timeparse.has_meridiem(st.context.get("requested_text")),
+                    window=_window(st),
+                )
+                if res.outcome is timeparse.Outcome.out_of_window:
+                    return await self._reask_time(now, clinic, wa, lang, st)
+                req_dt = res.at
         patient_id = await self.backend.get_or_create_patient(clinic.id, wa, profile_name)
         result = await self.backend.engine_call(
             lambda r: engine.book(
@@ -257,10 +406,20 @@ class Flow:
             )
         )
         if result.overflow is not None:
+            today = now.astimezone(IST).date()
+            alts = result.overflow.alternatives
             rows = [
-                {"id": f"sess:{a.session_id}", "title": a.name, "description": f"{a.free} slots"}
-                for a in result.overflow.alternatives
+                {
+                    "id": f"sess:{a.session_id}",
+                    "title": session_label(a.name, lang),
+                    "description": _slots_line(lang, a.free, a.date, today),
+                }
+                for a in alts
             ]
+            # Carry the alternatives' windows too, so a time typed after the
+            # switch resolves against the session actually picked.
+            st.context["_sessions"] = {str(a.session_id): _session_meta(a) for a in alts}
+            st.context["_session_names"] = {str(a.session_id): a.name for a in alts}
             await self.sender.send_list(
                 now,
                 wa,
@@ -273,6 +432,12 @@ class Flow:
             return
 
         entry = result.entry
+        # One plain sentence for anything the patient did not ask for — sent
+        # BEFORE the token details, as its own message (booking_confirmed is a
+        # Meta-approved template with a fixed parameter list).
+        notice = _booking_notice(now, lang, result.booking)
+        if notice:
+            await self._say(now, clinic.id, wa, notice)
         await self.sender.send(
             now,
             wa,

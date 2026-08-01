@@ -8,6 +8,7 @@ The engine never imports this; this imports the engine's result types only.
 from __future__ import annotations
 
 import dataclasses as dc
+from datetime import date as _date
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -23,6 +24,13 @@ def fmt_time(dt: datetime | None) -> str:
     if dt is None:
         return ""
     return dt.astimezone(IST).strftime("%I:%M %p").lstrip("0")
+
+
+def fmt_date(d: _date | None) -> str:
+    """Short day label for patient copy, e.g. '2 Aug, Sun'."""
+    if d is None:
+        return ""
+    return f"{d.day} {d.strftime('%b')}, {d.strftime('%a')}"
 
 
 @dc.dataclass(slots=True)

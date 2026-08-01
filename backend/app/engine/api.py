@@ -19,10 +19,21 @@ import logging
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
-from app.engine.errors import DuplicateActiveToken, GraceExpired, InvalidTransition
+from app.engine.errors import (
+    DuplicateActiveToken,
+    GraceExpired,
+    InvalidTransition,
+    SessionEnded,
+)
 from app.engine.etas import recompute_etas
 from app.engine.repo import Repo
-from app.engine.results import EngineResult, NotificationType, OverflowSuggestion
+from app.engine.results import (
+    BOOKING_NOTICE_THRESHOLD_S,
+    BookingInfo,
+    EngineResult,
+    NotificationType,
+    OverflowSuggestion,
+)
 from app.engine.state import (
     ACTIVE_STATUSES,
     GAP_OFFER_TTL,
@@ -132,8 +143,21 @@ async def _finalize_in_consult(
 # --------------------------------------------------------------------------- #
 # session lifecycle
 # --------------------------------------------------------------------------- #
+def _assert_not_ended(session: SessionState, now: datetime) -> None:
+    """Refuse to make a session live once its end_at has passed.
+
+    The 60s sweep closes every open/paused session past end_at — correctly, and
+    we do not weaken that. But accepting the transition anyway means the panel
+    shows success and the sweep silently undoes it a minute later, which reads
+    as a broken button. Reject up front so the reason is visible instead.
+    """
+    if session.end_at <= now:
+        raise SessionEnded(f"session ended at {session.end_at.isoformat()}")
+
+
 async def open_session(repo: Repo, now: datetime, session_id: UUID) -> EngineResult:
     session = await repo.lock_session(session_id)
+    _assert_not_ended(session, now)
     session.status = SessionStatus.open
     session.doctor_free_at = now  # live clock starts
     await repo.save_session(session)
@@ -153,6 +177,7 @@ async def pause_session(repo: Repo, now: datetime, session_id: UUID) -> EngineRe
 
 async def resume_session(repo: Repo, now: datetime, session_id: UUID) -> EngineResult:
     session = await repo.lock_session(session_id)
+    _assert_not_ended(session, now)
     session.status = SessionStatus.open
     await repo.save_session(session)
     await repo.add_event(session.clinic_id, session.id, None, "session_resumed")
@@ -198,11 +223,14 @@ async def reopen_session(repo: Repo, now: datetime, session_id: UUID) -> EngineR
     would summon people who were told not to come. Reopening only restores the
     ability to work the queue again (walk-ins, new bookings, NEXT).
 
-    Allowed from: closed, cancelled (mis-tap recovery for today's session).
+    Allowed from: closed, cancelled (mis-tap recovery for today's session), and
+    only while the session's own end_at is still in the future — see
+    ``_assert_not_ended``.
     """
     session = await repo.lock_session(session_id)
     if session.status not in (SessionStatus.closed, SessionStatus.cancelled):
         raise InvalidTransition(f"cannot reopen from {session.status}")
+    _assert_not_ended(session, now)
     session.status = SessionStatus.open
     session.doctor_free_at = now
     await repo.save_session(session)
@@ -239,6 +267,17 @@ async def book(
     floor = max(now, session.start_at)
     priority_time = floor if requested_time is None else max(requested_time, floor)
 
+    # Record WHY the granted time is what it is. The clamp above is correct
+    # (rule 1), but applying it silently is what makes a patient who asked for
+    # 11:30 and got 5:00 PM believe the clinic's system is broken. The flow
+    # turns this into one plain sentence ahead of the token details.
+    adjust_reason: str | None = None
+    if (
+        requested_time is not None
+        and (priority_time - requested_time).total_seconds() > BOOKING_NOTICE_THRESHOLD_S
+    ):
+        adjust_reason = "session_start" if floor == session.start_at else "now"
+
     # overflow checks -> suggest alternatives instead of forcing the token in
     reason: str | None = None
     if session.status in (SessionStatus.closed, SessionStatus.cancelled):
@@ -272,7 +311,18 @@ async def book(
     for e in entries:
         await repo.save_entry(e)
 
-    result = EngineResult(entry=entry)
+    result = EngineResult(
+        entry=entry,
+        booking=BookingInfo(
+            session_date=session.date,
+            session_name=session.name,
+            session_start=session.start_at,
+            session_end=session.end_at,
+            granted=priority_time,
+            requested=requested_time,
+            adjust_reason=adjust_reason,
+        ),
+    )
     result.touched(entry)
     return result
 

@@ -7,8 +7,9 @@ Intent): the sends it emits and the resulting engine state in MemConvo.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from app import engine
 from app.convo.flow import Flow
@@ -75,6 +76,39 @@ def _session(convo, clinic_id, *, cap=40, name="morning"):
         token_cap=cap,
         status=SessionStatus.open,
         doctor_free_at=now,
+        avg_consult_s=600,
+    )
+    return convo.repo.add_session(s)
+
+
+# --------------------------------------------------------------------------- #
+# IST-anchored session helpers — the ambiguous-time rules are all about the
+# session's *wall clock* window, so these tests state windows in IST.
+# --------------------------------------------------------------------------- #
+IST = ZoneInfo("Asia/Kolkata")
+DAY = date(2026, 7, 5)
+
+
+def ist(h, m=0, day=DAY):
+    return datetime(day.year, day.month, day.day, h, m, tzinfo=IST).astimezone(UTC)
+
+
+def hhmm(at):
+    return "" if at is None else at.astimezone(IST).strftime("%H:%M")
+
+
+def _ist_session(convo, clinic_id, *, name, start, end, day=DAY, cap=40, status=None):
+    """A session whose window is given as IST wall-clock hours."""
+    s = SessionState(
+        id=uuid4(),
+        clinic_id=clinic_id,
+        date=day,
+        name=name,
+        start_at=ist(*start, day=day),
+        end_at=ist(*end, day=day),
+        token_cap=cap,
+        status=status or SessionStatus.open,
+        doctor_free_at=ist(*start, day=day),
         avg_consult_s=600,
     )
     return convo.repo.add_session(s)
@@ -324,16 +358,20 @@ def test_greeting_with_active_token_shows_status_not_session_list():
     pid = run(convo.get_or_create_patient(clinic.id, WA, "self"))
     run(
         engine.book(
-            convo.repo, dt(9),
-            clinic_id=clinic.id, session_id=s.id,
-            patient_id=pid, requested_time=None, source=Source.whatsapp,
+            convo.repo,
+            dt(9),
+            clinic_id=clinic.id,
+            session_id=s.id,
+            patient_id=pid,
+            requested_time=None,
+            source=Source.whatsapp,
         )
     )
     store.outbound.clear()
     run(_in(flow, store, text="hi"))
     assert len(store.outbound) == 1
     reply = body(last(store))
-    from app.wa.templates import prompt
+
     # reply uses greeting_has_active prompt — contains token number
     assert "1" in reply  # token number
     assert last(store)["kind"] == "text"
@@ -362,7 +400,8 @@ def test_low_confidence_choosing_profile_reasks_profile_buttons():
     run(_in(flow, store, text="blah"))
     assert any(
         set(btn_ids(o)) == {"profile:self", "profile:family"}
-        for o in store.outbound if o["kind"] == "button"
+        for o in store.outbound
+        if o["kind"] == "button"
     )
 
 
@@ -372,9 +411,13 @@ def test_low_confidence_confirm_cancel_reasks_confirm_buttons():
     pid = run(convo.get_or_create_patient(clinic.id, WA, "self"))
     run(
         engine.book(
-            convo.repo, dt(9),
-            clinic_id=clinic.id, session_id=s.id,
-            patient_id=pid, requested_time=None, source=Source.whatsapp,
+            convo.repo,
+            dt(9),
+            clinic_id=clinic.id,
+            session_id=s.id,
+            patient_id=pid,
+            requested_time=None,
+            source=Source.whatsapp,
         )
     )
     run(_in(flow, store, text="cancel"))  # -> confirm_cancel
@@ -383,8 +426,171 @@ def test_low_confidence_confirm_cancel_reasks_confirm_buttons():
     run(_in(flow, store, text="idontknow"))
     assert any(
         set(btn_ids(o)) == {"confirmcancel:yes", "confirmcancel:no"}
-        for o in store.outbound if o["kind"] == "button"
+        for o in store.outbound
+        if o["kind"] == "button"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Ambiguous typed times resolve INSIDE the chosen session (Part 1)
+# --------------------------------------------------------------------------- #
+def _pick(flow, store, session, now):
+    """Walk the real entry path: greeting -> session list -> tap a session.
+
+    Going through the list matters: that is where the flow stashes each
+    session's window, which is what makes a bare hour resolvable at all.
+    """
+    run(_in(flow, store, text="hi", now=now))
+    run(_in(flow, store, button_id=f"sess:{session.id}", now=now))
+
+
+def _evening_clinic(cap=40):
+    """A clinic whose only bookable session is the 17:00-23:30 evening OPD."""
+    store, sender, convo, clinic, _s, parse, flow = build()
+    convo.repo.sessions.clear()
+    ev = _ist_session(convo, clinic.id, name="evening", start=(17, 0), end=(23, 30), cap=cap)
+    return store, convo, clinic, ev, parse, flow
+
+
+def test_bare_time_resolves_to_the_pm_reading_inside_an_evening_session():
+    """'9:30' typed into a 17:00-23:30 session means 21:30, not 09:30."""
+    store, convo, clinic, ev, parse, flow = _evening_clinic()
+    now = ist(17, 30)
+    _pick(flow, store, ev, now)
+    parse.push(intent="book", time_pref="09:30", confidence=0.9)
+    run(_in(flow, store, text="9:30", now=now))
+    run(_in(flow, store, button_id="profile:self", now=now))
+    e = entries(convo)[0]
+    assert hhmm(e.priority_time) == "21:30"
+
+
+def test_bare_1130_is_never_silently_clamped_to_the_session_start():
+    """The production bug: '11:30' became 5:00 PM with no explanation.
+
+    23:30 sits exactly at end_at so the engine legitimately overflows it to
+    another session — what must never happen again is a token quietly issued
+    at the session start.
+    """
+    store, convo, clinic, ev, parse, flow = _evening_clinic()
+    _ist_session(
+        convo, clinic.id, name="morning", start=(9, 0), end=(13, 0), day=DAY + timedelta(days=1)
+    )
+    now = ist(23, 10)  # the real booking's clock
+    _pick(flow, store, ev, now)
+    parse.push(intent="book", time_pref="11:30", confidence=0.9)
+    run(_in(flow, store, text="11:30", now=now))
+    run(_in(flow, store, button_id="profile:self", now=now))
+    for e in entries(convo):
+        assert hhmm(e.priority_time) != "17:00", "silently clamped to session start again"
+
+
+def test_out_of_window_time_reasks_instead_of_clamping():
+    """'8 PM' in a 09:00-13:00 morning session: re-ask, don't move them."""
+    store, sender, convo, clinic, _s, parse, flow = build()
+    convo.repo.sessions.clear()
+    mor = _ist_session(convo, clinic.id, name="morning", start=(9, 0), end=(13, 0))
+    now = ist(9, 30)
+    _pick(flow, store, mor, now)
+    store.outbound.clear()
+    parse.push(intent="book", time_pref="20:00", confidence=0.9)
+    run(_in(flow, store, text="8 PM", now=now))
+
+    said = [body(o) for o in store.outbound if o["kind"] == "text"]
+    assert said, "nothing said about the out-of-window time"
+    assert "इस सत्र में नहीं" in said[0]
+    assert "9:00 AM" in said[0] and "1:00 PM" in said[0]  # the window is stated
+    # and it re-offers the time step rather than dead-ending or booking
+    assert any("time:asap" in btn_ids(o) for o in store.outbound if o["kind"] == "button")
+    assert not entries(convo)
+
+
+def test_time_typed_before_choosing_a_session_resolves_on_that_sessions_day():
+    """'kal subah 10 baje' typed first, then the session picked from the list."""
+    store, sender, convo, clinic, _s, parse, flow = build()
+    convo.repo.sessions.clear()
+    tomorrow = DAY + timedelta(days=1)
+    mor = _ist_session(convo, clinic.id, name="morning", start=(9, 0), end=(13, 0), day=tomorrow)
+    now = ist(23, 10)
+    parse.push(intent="book", time_pref="10:00", confidence=0.9)
+    run(_in(flow, store, text="kal subah 10 baje", now=now))
+    run(_in(flow, store, button_id=f"sess:{mor.id}", now=now))
+    run(_in(flow, store, button_id="profile:self", now=now))
+    e = entries(convo)[0]
+    assert hhmm(e.priority_time) == "10:00"
+    assert e.priority_time.astimezone(IST).date() == tomorrow
+
+
+def test_session_list_rows_carry_the_date_for_non_today_sessions():
+    """Two 'evening' rows on different days must be distinguishable."""
+    store, sender, convo, clinic, _s, parse, flow = build()
+    convo.repo.sessions.clear()
+    _ist_session(convo, clinic.id, name="evening", start=(17, 0), end=(23, 30))
+    _ist_session(
+        convo, clinic.id, name="evening", start=(17, 0), end=(23, 30), day=DAY + timedelta(days=1)
+    )
+    run(_in(flow, store, text="hi", now=ist(16, 0)))
+    rows = last(store)["payload"]["interactive"]["action"]["sections"][0]["rows"]
+    assert len(rows) == 2
+    assert rows[0]["description"] != rows[1]["description"]
+    assert rows[0]["title"] == "शाम"  # patient-facing name, not the DB's 'evening'
+    assert "6 Jul" in rows[1]["description"]  # tomorrow's row is dated
+
+
+# --------------------------------------------------------------------------- #
+# Never move a patient's time silently (Part 2)
+# --------------------------------------------------------------------------- #
+def test_clamped_booking_explains_itself_before_the_token():
+    """Asked for 09:30 at 11:00 — the queue starts now, and we say so."""
+    store, sender, convo, clinic, _s, parse, flow = build()
+    convo.repo.sessions.clear()
+    mor = _ist_session(convo, clinic.id, name="morning", start=(9, 0), end=(13, 0))
+    now = ist(11, 0)
+    _pick(flow, store, mor, now)
+    parse.push(intent="book", time_pref="09:30", confidence=0.9)
+    run(_in(flow, store, text="subah 9:30", now=now))
+    store.outbound.clear()
+    run(_in(flow, store, button_id="profile:self", now=now))
+
+    texts = [body(o) for o in store.outbound if o["kind"] == "text"]
+    assert texts, "no explanation sent before the token"
+    assert "9:30 AM" in texts[0]
+    assert "वह समय निकल चुका है" in texts[0]
+    # ...and it precedes the confirmation, which still carries the Arrived button
+    assert any(
+        any(b.startswith("arrived:") for b in btn_ids(o))
+        for o in store.outbound
+        if o["kind"] == "button"
+    )
+    assert hhmm(entries(convo)[0].priority_time) == "11:00"
+
+
+def test_tomorrow_booking_says_which_day():
+    store, sender, convo, clinic, _s, parse, flow = build()
+    convo.repo.sessions.clear()
+    tomorrow = DAY + timedelta(days=1)
+    ev = _ist_session(convo, clinic.id, name="evening", start=(17, 0), end=(23, 30), day=tomorrow)
+    now = ist(23, 10)
+    run(_in(flow, store, button_id=f"sess:{ev.id}", now=now))
+    run(_in(flow, store, button_id="time:asap", now=now))
+    store.outbound.clear()
+    run(_in(flow, store, button_id="profile:self", now=now))
+    texts = [body(o) for o in store.outbound if o["kind"] == "text"]
+    assert texts, "next-day booking sent no day notice"
+    assert "कल" in texts[0] and "6 Jul" in texts[0]
+    assert "शाम" in texts[0]  # session named in Hindi, not 'evening'
+
+
+def test_same_day_asap_booking_sends_no_notice():
+    """Nothing moved and it is today — don't add noise to a clean booking."""
+    store, sender, convo, clinic, _s, parse, flow = build()
+    convo.repo.sessions.clear()
+    mor = _ist_session(convo, clinic.id, name="morning", start=(9, 0), end=(13, 0))
+    now = ist(9, 30)
+    run(_in(flow, store, button_id=f"sess:{mor.id}", now=now))
+    run(_in(flow, store, button_id="time:asap", now=now))
+    store.outbound.clear()
+    run(_in(flow, store, button_id="profile:self", now=now))
+    assert [o["kind"] for o in store.outbound] == ["button"]  # confirmation only
 
 
 def test_stop_deletes_and_cancels():

@@ -39,4 +39,11 @@ def test_committed_schema_matches_live_model():
 def test_snapshot_field_names_are_exactly_the_panel_type():
     """Guards the top-level field set the panel's QueueSnapshot TS type reads."""
     props = set(QueueSnapshot.model_json_schema()["properties"].keys())
-    assert props == {"session", "now_serving", "entries", "sessions", "can_undo"}
+    assert props == {
+        "session",
+        "now_serving",
+        "entries",
+        "sessions",
+        "upcoming",
+        "can_undo",
+    }

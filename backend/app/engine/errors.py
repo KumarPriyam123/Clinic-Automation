@@ -18,3 +18,13 @@ class GraceExpired(EngineError):
 
 class InvalidTransition(EngineError):
     """The entry/session is not in a state that allows this transition."""
+
+
+class SessionEnded(InvalidTransition):
+    """The session's end_at has already passed, so it cannot be made live.
+
+    Distinct from InvalidTransition because it has a distinct cause and a
+    distinct answer for the receptionist: the 60s sweep auto-closes any session
+    past its end_at, so accepting the transition would only have it silently
+    reverted a minute later. Rejecting it up front makes the reason visible.
+    """

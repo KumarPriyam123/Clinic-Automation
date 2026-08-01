@@ -30,6 +30,7 @@ def _load(name: str) -> dict:
 def _sign(secret: str, body: bytes) -> str:
     return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
+
 T0 = datetime(2026, 7, 5, 9, 0, tzinfo=UTC)
 GRAPH = "https://graph.facebook.com/v20.0/123/messages"
 OK = {"messaging_product": "whatsapp", "messages": [{"id": "wamid.OUT"}]}

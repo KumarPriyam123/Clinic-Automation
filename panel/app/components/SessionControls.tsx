@@ -54,7 +54,11 @@ export function SessionControls({
   const served = session.served;
   // reopen is a same-day recovery from closed OR cancelled (mis-tap recovery)
   const todayIST = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-  const canReopen = (st === "closed" || st === "cancelled") && session.date === todayIST;
+  // Past its own end_at, the 60s sweep re-closes any session we reopen. Say so
+  // rather than offering a button whose effect silently vanishes a minute later.
+  const timePassed = session.end_at !== null && new Date(session.end_at).getTime() <= Date.now();
+  const canReopen =
+    (st === "closed" || st === "cancelled") && session.date === todayIST && !timePassed;
 
   async function reloadApp() {
     onClose();
@@ -116,8 +120,19 @@ export function SessionControls({
 
   return (
     <Sheet open={open} onClose={close} title={STRINGS.controls.hi}>
-      {/* A closed/cancelled session shows recovery (reopen only for today's close/cancel). */}
-      {st === "closed" || st === "cancelled" ? (
+      {/* A future day is a preview — none of these actions can apply to it. */}
+      {session.read_only ? (
+        <div className="grid gap-2.5">
+          <div className="rounded-xl bg-booked-bg p-3 text-booked-fg">
+            <p className="text-[15px] font-semibold leading-snug">{STRINGS.viewOnly.hi}</p>
+            <p className="mt-0.5 text-xs leading-snug opacity-80">{STRINGS.viewOnly.en}</p>
+          </div>
+          <button className="btn-ghost h-touch w-full border-0" onClick={close}>
+            {STRINGS.close.hi}
+          </button>
+        </div>
+      ) : /* A closed/cancelled session shows recovery (reopen only for today's close/cancel). */
+      st === "closed" || st === "cancelled" ? (
         confirm === "reopen" ? (
           <ConfirmPanel
             lines={reopenLines}
@@ -130,10 +145,22 @@ export function SessionControls({
             <p className="px-1 text-sm text-muted">
               {st === "closed" ? "सत्र बंद है / session closed" : "सत्र रद्द है / cancelled"}
             </p>
-            {canReopen && (
+            {canReopen ? (
               <button className="btn-primary h-touch w-full" onClick={() => setConfirm("reopen")}>
                 ↻ {STRINGS.reopen.hi}
               </button>
+            ) : (
+              timePassed &&
+              session.date === todayIST && (
+                <div className="rounded-xl bg-booked-bg p-3 text-booked-fg">
+                  <p className="text-[15px] font-semibold leading-snug">
+                    {STRINGS.sessionTimePassed.hi}
+                  </p>
+                  <p className="mt-0.5 text-xs leading-snug opacity-80">
+                    {STRINGS.sessionTimePassed.en}
+                  </p>
+                </div>
+              )
             )}
             <button className="btn-ghost h-touch w-full border-0" onClick={close}>
               {STRINGS.close.hi}

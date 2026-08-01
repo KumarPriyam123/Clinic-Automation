@@ -169,6 +169,11 @@ PROMPTS: dict[str, dict[str, str]] = {
         "en": "ℹ️ We save your name & number for booking. Reply STOP to delete anytime.",
     },
     "choose_session": {"hi": "कौन सा सत्र?", "en": "Which session?"},
+    "slots_left": {"hi": "{free} जगह बाकी", "en": "{free} slots left"},
+    "slots_left_on": {
+        "hi": "{date} • {free} जगह बाकी",
+        "en": "{date} • {free} slots left",
+    },
     "no_sessions": {
         "hi": "क्षमा करें, अभी कोई सत्र उपलब्ध नहीं है।",
         "en": "Sorry, no sessions are open for booking right now.",
@@ -229,6 +234,42 @@ PROMPTS: dict[str, dict[str, str]] = {
         "hi": "बढ़िया! आपका समय पहले कर दिया गया है।",
         "en": "Great! You've been moved earlier.",
     },
+    # --- booking transparency (never move a patient silently) ------------- #
+    # Sent when the typed time lands outside the chosen session's window and
+    # BOTH the AM and PM readings miss it. We re-ask instead of clamping: a
+    # patient who is told the time doesn't fit can choose again; a patient
+    # who is silently moved 5 hours believes the clinic's system is broken.
+    "time_out_of_window": {
+        "hi": "यह समय इस सत्र में नहीं है ({start}–{end})। कोई और समय बताएं या "
+        "'जल्दी से जल्दी' दबाएँ।",
+        "en": "That time isn't in this session ({start}–{end}). Please type another time "
+        "or tap 'ASAP'.",
+    },
+    # Sent just before booking_confirmed when the granted time had to move more
+    # than 10 minutes from what the patient asked for.
+    "adjusted_to_start": {
+        "hi": "आपने {requested} कहा था, पर सत्र {start} से शुरू होता है — आपको शुरुआत का "
+        "नंबर दिया गया है।",
+        "en": "You asked for {requested}, but this session starts at {start} — you've been "
+        "given a token from the start of the session.",
+    },
+    "adjusted_to_now": {
+        "hi": "आपने {requested} कहा था, पर वह समय निकल चुका है — आपको अभी की कतार में "
+        "नंबर दिया गया है।",
+        "en": "You asked for {requested}, but that time has already passed — you've been "
+        "given a token in the current queue.",
+    },
+    # Sent when the booking is NOT for today. Without this a patient booking at
+    # 11 PM reads the ETA and comes to the clinic tonight.
+    "booking_day_tomorrow": {
+        "hi": "ध्यान दें: यह बुकिंग *कल* ({date}) के {session} सत्र की है — आज की नहीं।",
+        "en": "Please note: this booking is for *TOMORROW* ({date}), the {session} session "
+        "— not today.",
+    },
+    "booking_day_other": {
+        "hi": "ध्यान दें: यह बुकिंग *{date}* के {session} सत्र की है — आज की नहीं।",
+        "en": "Please note: this booking is for *{date}*, the {session} session — not today.",
+    },
 }
 
 # Interactive button labels for conversational prompts (id, hi, en).
@@ -237,6 +278,22 @@ BTN_SELF = _Btn("profile:self", "खुद", "Myself")
 BTN_FAMILY = _Btn("profile:family", "परिवार", "Family")
 BTN_CANCEL_YES = _Btn("confirmcancel:yes", "हाँ, रद्द करें", "Yes, cancel")
 BTN_CANCEL_NO = _Btn("confirmcancel:no", "नहीं", "No")
+
+
+#: Session names as stored in `sessions.name`. Unknown names (a clinic may use
+#: its own) fall through unchanged rather than being dropped.
+SESSION_LABELS: dict[str, dict[str, str]] = {
+    "morning": {"hi": "सुबह", "en": "morning"},
+    "afternoon": {"hi": "दोपहर", "en": "afternoon"},
+    "evening": {"hi": "शाम", "en": "evening"},
+    "night": {"hi": "रात", "en": "night"},
+}
+
+
+def session_label(name: str, lang: str) -> str:
+    """Patient-facing name of a session ('evening' -> 'शाम')."""
+    pair = SESSION_LABELS.get((name or "").strip().lower())
+    return pair["hi" if lang == "hi" else "en"] if pair else name
 
 
 def prompt(key: str, lang: str, **fmt: object) -> str:

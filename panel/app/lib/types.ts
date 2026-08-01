@@ -27,6 +27,9 @@ export interface SessionMeta {
   doctor_free_at: string | null;
   served: number;
   waiting: number;
+  allowed_actions: string[];
+  /** True for any day but today: preview only. The backend rejects mutations. */
+  read_only: boolean;
 }
 
 export interface NowServing {
@@ -54,8 +57,15 @@ export interface SessionListItem {
   id: string;
   name: string;
   status: SessionStatus;
+  date: string;
   start_at: string | null;
   end_at: string | null;
+}
+
+/** Bookings already waiting in tomorrow's queue — the after-hours capture. */
+export interface Upcoming {
+  date: string;
+  count: number;
 }
 
 export interface QueueSnapshot {
@@ -63,6 +73,7 @@ export interface QueueSnapshot {
   now_serving: NowServing | null;
   entries: QueueEntry[];
   sessions?: SessionListItem[];
+  upcoming?: Upcoming;
   can_undo?: boolean;
 }
 

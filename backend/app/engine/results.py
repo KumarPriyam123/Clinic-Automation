@@ -44,6 +44,10 @@ class SessionRef:
     name: str
     date: _date
     free: int
+    #: Carried so the conversation can resolve a typed time against the
+    #: alternative the patient picks, exactly as for a first-choice session.
+    start_at: datetime | None = None
+    end_at: datetime | None = None
 
 
 @dc.dataclass(slots=True)
@@ -54,6 +58,33 @@ class OverflowSuggestion:
     alternatives: list[SessionRef] = dc.field(default_factory=list)
 
 
+#: A booking whose granted time differs from the requested one by more than
+#: this is materially different and MUST be explained to the patient.
+BOOKING_NOTICE_THRESHOLD_S = 600
+
+
+@dc.dataclass(slots=True)
+class BookingInfo:
+    """What book() actually granted, versus what the patient asked for.
+
+    Pure data. The engine states the facts (which day, which time, why it
+    moved); ``convo/flow.py`` turns them into the patient's sentence. Without
+    this the patient sees only a token and an ETA, and a clamped or next-day
+    booking looks like the system is broken — the worst trust failure in the
+    booking flow.
+    """
+
+    session_date: _date
+    session_name: str
+    session_start: datetime
+    session_end: datetime
+    granted: datetime
+    requested: datetime | None = None
+    #: 'session_start' | 'now' | None — set only when the move exceeds
+    #: BOOKING_NOTICE_THRESHOLD_S, i.e. only when it is worth telling them.
+    adjust_reason: str | None = None
+
+
 @dc.dataclass(slots=True)
 class EngineResult:
     """The single return type of every public engine transition."""
@@ -62,6 +93,7 @@ class EngineResult:
     notifications: list[NotificationIntent] = dc.field(default_factory=list)
     entry: object | None = None  # the created/served entry, when relevant
     overflow: OverflowSuggestion | None = None
+    booking: BookingInfo | None = None  # set by book() on success
 
     def notify(self, type_: NotificationType, entry_id: UUID | None, **params: object) -> None:
         self.notifications.append(NotificationIntent(type_, entry_id, dict(params)))

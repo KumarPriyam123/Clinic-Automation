@@ -10,8 +10,15 @@ const POLL_MS = 4000;
 export const STALE_MS = 10 * 60 * 1000; // 10 min — beyond this show error, not data
 
 /** Today's date in IST as "YYYY-MM-DD" — matches the session.date field. */
-function todayIST(): string {
+export function todayIST(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+
+/** `days` from today, in IST, as "YYYY-MM-DD". */
+export function dayIST(offset: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + offset);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
 /**
@@ -46,6 +53,9 @@ export interface QueueController {
   snap: QueueSnapshot | null;
   sessionId: string | null;
   setSessionId: (id: string) => void;
+  /** The day being viewed, ISO "YYYY-MM-DD" in IST. */
+  day: string;
+  setDay: (date: string) => void;
   offline: boolean;
   /** Unix ms of the last successful poll. null until first success. */
   lastLiveAt: number | null;
@@ -64,6 +74,7 @@ export function useQueue(): QueueController {
   const [sessionId, setSessionId] = useState<string | null>(
     () => loadCache()?.session?.id ?? null,
   );
+  const [day, setDayState] = useState<string>(() => todayIST());
   const [offline, setOffline] = useState(false);
   const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,6 +85,7 @@ export function useQueue(): QueueController {
   const prevSig = useRef<string>(arrivalSignature(loadCache()));
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mutating = useRef(false);
+  const snapRef = useRef<QueueSnapshot | null>(loadCache());
 
   const adopt = useCallback((next: QueueSnapshot, fromPoll: boolean) => {
     // detect a newly-landed patient only during background polling
@@ -87,10 +99,20 @@ export function useQueue(): QueueController {
       }
     }
     prevSig.current = sig;
-    setSnap(next);
-    if (next.session) setSessionId(next.session.id);
+    // /queue and EVERY mutation response omit `sessions` and `upcoming` — only
+    // the day routes carry them. Carry the last known values forward or the
+    // session switcher and the tomorrow badge disappear after the first NEXT.
+    const prev = snapRef.current;
+    const merged: QueueSnapshot = {
+      ...next,
+      sessions: next.sessions ?? prev?.sessions,
+      upcoming: next.upcoming ?? prev?.upcoming,
+    };
+    snapRef.current = merged;
+    setSnap(merged);
+    if (merged.session) setSessionId(merged.session.id);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
+      window.localStorage.setItem(CACHE_KEY, JSON.stringify(merged));
     }
   }, []);
 
@@ -99,9 +121,9 @@ export function useQueue(): QueueController {
     try {
       const data = sessionId
         ? await api.fetchQueue(sessionId)
-        : await api.fetchToday();
-      // fetchQueue drops the session list; keep the one today gave us
-      if (sessionId && snap?.sessions) data.sessions = snap.sessions;
+        : day === todayIST()
+          ? await api.fetchToday()
+          : await api.fetchDay(day);
       setOffline(false);
       setLastLiveAt(Date.now());
       adopt(data, true);
@@ -111,7 +133,13 @@ export function useQueue(): QueueController {
     } finally {
       setLoading(false);
     }
-  }, [sessionId, snap?.sessions, adopt]);
+  }, [sessionId, day, adopt]);
+
+  /** Switch the day in view. Clearing sessionId lets the day route pick. */
+  const setDay = useCallback((next: string) => {
+    setDayState(next);
+    setSessionId(null);
+  }, []);
 
   useEffect(() => {
     poll();
@@ -157,6 +185,8 @@ export function useQueue(): QueueController {
     snap,
     sessionId,
     setSessionId,
+    day,
+    setDay,
     offline,
     lastLiveAt,
     loading,

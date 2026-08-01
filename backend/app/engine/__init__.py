@@ -25,8 +25,15 @@ from app.engine.api import (
     resume_session,
     sweep,
 )
-from app.engine.errors import DuplicateActiveToken, EngineError, GraceExpired, InvalidTransition
+from app.engine.errors import (
+    DuplicateActiveToken,
+    EngineError,
+    GraceExpired,
+    InvalidTransition,
+    SessionEnded,
+)
 from app.engine.results import (
+    BookingInfo,
     EngineResult,
     NotificationIntent,
     NotificationType,
@@ -58,6 +65,8 @@ __all__ = [
     "EngineError",
     "GraceExpired",
     "InvalidTransition",
+    "SessionEnded",
+    "BookingInfo",
     "EngineResult",
     "NotificationIntent",
     "NotificationType",
