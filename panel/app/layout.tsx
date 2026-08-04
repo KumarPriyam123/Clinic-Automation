@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Noto_Sans } from "next/font/google";
 import "./globals.css";
 import { SwRegister } from "./components/SwRegister";
+import { ProdBackendWarning } from "./components/ProdBackendWarning";
 import { LocaleProvider } from "./lib/locale";
 
 const noto = Noto_Sans({
@@ -40,6 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="hi" translate="no" className={`${noto.variable} notranslate`}>
       <body className="font-sans antialiased">
+        <ProdBackendWarning />
         <LocaleProvider>{children}</LocaleProvider>
         <SwRegister />
       </body>

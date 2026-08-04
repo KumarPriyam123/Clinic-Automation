@@ -7,6 +7,10 @@ const BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "/api";
 const API = `${BASE}/panel`;
 
+/** The resolved API base, exported so the dev-only prod-backend guard can see
+ * what this bundle was actually built against. */
+export const API_BASE = BASE;
+
 const TOKEN_KEY = "clinicq.token";
 const CLINIC_KEY = "clinicq.clinic";
 
