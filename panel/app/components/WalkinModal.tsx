@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { STRINGS } from "../lib/i18n";
+import { useLocale } from "../lib/locale";
 import { Sheet } from "./Sheet";
 
 /** Walk-in add — the only place the keyboard is needed. Name required (autofocus),
@@ -17,6 +17,7 @@ export function WalkinModal({
   onClose: () => void;
   onSubmit: (name: string, phone?: string) => void;
 }) {
+  const { t } = useLocale();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
@@ -35,11 +36,7 @@ export function WalkinModal({
   };
 
   return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title={emergency ? STRINGS.emergency.hi : STRINGS.addWalkin.hi}
-    >
+    <Sheet open={open} onClose={onClose} title={emergency ? t("emergency") : t("addWalkin")}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -51,7 +48,7 @@ export function WalkinModal({
           ref={nameRef}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder={STRINGS.name.hi}
+          placeholder={t("name")}
           className="field h-touch"
           autoComplete="off"
           enterKeyHint="done"
@@ -59,7 +56,7 @@ export function WalkinModal({
         <input
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
-          placeholder={STRINGS.phone.hi}
+          placeholder={t("phone")}
           className="field h-touch"
           inputMode="tel"
           autoComplete="off"
@@ -69,7 +66,7 @@ export function WalkinModal({
           disabled={!name.trim()}
           className={`h-touch w-full ${emergency ? "btn-danger" : "btn-primary"} disabled:opacity-50`}
         >
-          {emergency ? `＋ ${STRINGS.emergency.hi}` : `＋ ${STRINGS.add.hi}`}
+          ＋ {emergency ? t("emergency") : t("add")}
         </button>
       </form>
     </Sheet>

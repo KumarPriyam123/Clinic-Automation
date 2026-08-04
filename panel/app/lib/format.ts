@@ -1,3 +1,5 @@
+import { type Lang, pick, strings } from "@/lib/i18n";
+
 const IST = "Asia/Kolkata";
 
 /** Clock time in IST, e.g. "10:45 AM" — how the clinic reads a target/ETA. */
@@ -17,14 +19,22 @@ export function minutesUntil(iso: string | null | undefined, now = Date.now()): 
   return Math.round((new Date(iso).getTime() - now) / 60000);
 }
 
-/** "in 12 min" / "now" / "5 min late" style relative label for an ETA. */
-export function relEta(iso: string | null | undefined, now = Date.now()): string {
+/** "12 min" / "now" style relative label for an ETA, in the panel's locale.
+ *
+ * `lang` is required on purpose: a defaulted locale is how mixed-language
+ * screens creep back in. Only meaningful for TODAY's sessions — a future-dated
+ * session shows `clock()` instead (a 10-hour countdown reads as a bug). */
+export function relEta(
+  iso: string | null | undefined,
+  now: number,
+  lang: Lang,
+): string {
   if (!iso) return "—";
   const m = minutesUntil(iso, now);
-  if (m <= 0) return "अभी / now";
-  if (m < 60) return `${m} मिनट / min`;
+  if (m <= 0) return pick(strings.relNow, lang);
+  if (m < 60) return `${m} ${pick(strings.relMin, lang)}`;
   const h = Math.floor(m / 60);
-  return `${h}घ ${m % 60}मि`;
+  return `${h}${pick(strings.relHourShort, lang)} ${m % 60}${pick(strings.relMinShort, lang)}`;
 }
 
 /** mm:ss elapsed since a start instant — the live consult timer. */

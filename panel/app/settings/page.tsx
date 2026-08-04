@@ -5,19 +5,22 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as api from "../lib/api";
 import { getToken, logout } from "../lib/api";
-import { STRINGS } from "../lib/i18n";
+import { useLocale } from "../lib/locale";
 import type { SettingsPayload, TimetableRow } from "../lib/types";
+import type { StringKey } from "@/lib/i18n";
 
-const WEEKDAYS = ["सोम", "मंगल", "बुध", "गुरु", "शुक्र", "शनि", "रवि"];
+/** `timetable.weekday` is 0=Monday. */
+const WEEKDAY_KEYS: StringKey[] = ["wd0", "wd1", "wd2", "wd3", "wd4", "wd5", "wd6"];
 
 export default function SettingsPage() {
   const router = useRouter();
+  const { t } = useLocale();
   const [data, setData] = useState<SettingsPayload | null>(null);
   const [tt, setTt] = useState<TimetableRow[]>([]);
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<StringKey | null>(null);
 
   useEffect(() => {
     if (!getToken()) {
@@ -30,7 +33,7 @@ export default function SettingsPage() {
         setData(d);
         setTt(d.timetable);
       })
-      .catch(() => setErr("लोड नहीं हुआ / load failed"));
+      .catch(() => setErr("loadFailed"));
   }, [router]);
 
   if (!data) {
@@ -62,7 +65,7 @@ export default function SettingsPage() {
       };
       if (pin) {
         if (!/^\d{6}$/.test(pin)) {
-          setErr("PIN 6 अंकों का हो / PIN must be 6 digits");
+          setErr("pinSixDigits");
           setBusy(false);
           return;
         }
@@ -75,7 +78,7 @@ export default function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch {
-      setErr("सेव नहीं हुआ / save failed");
+      setErr("saveFailed");
     } finally {
       setBusy(false);
     }
@@ -87,87 +90,100 @@ export default function SettingsPage() {
         <div className="mb-4 flex items-center gap-3">
           <Link
             href="/"
-            className="flex h-11 w-11 items-center justify-center rounded-xl border border-line bg-surface text-xl active:bg-canvas"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-xl active:bg-canvas"
           >
             ‹
           </Link>
-          <h1 className="text-xl font-bold text-ink">{STRINGS.settings.hi}</h1>
+          <h1 className="truncate text-xl font-bold text-ink">{t("settings")}</h1>
         </div>
 
         {/* clinic profile */}
-        <Card title="क्लिनिक / Clinic">
-          <Field label="नाम / Name" value={data.clinic.name} onChange={(v) => patchClinic({ name: v })} />
+        <Card title={t("cardClinic")}>
           <Field
-            label="डॉक्टर / Doctor"
+            label={t("fieldName")}
+            value={data.clinic.name}
+            onChange={(v) => patchClinic({ name: v })}
+          />
+          <Field
+            label={t("fieldDoctor")}
             value={data.clinic.doctor_name}
             onChange={(v) => patchClinic({ doctor_name: v })}
           />
           <Field
-            label="विशेषज्ञता / Specialty"
+            label={t("fieldSpecialty")}
             value={data.clinic.specialty ?? ""}
             onChange={(v) => patchClinic({ specialty: v })}
           />
           <Field
-            label="फीस ₹ / Fee"
+            label={t("fieldFee")}
             value={data.clinic.fee_inr?.toString() ?? ""}
             inputMode="numeric"
             onChange={(v) => patchClinic({ fee_inr: v ? Number(v.replace(/\D/g, "")) : null })}
           />
         </Card>
 
-        {/* language + toggles */}
-        <Card title="भाषा और विकल्प / Language & options">
-          <Row label="भाषा / Language">
-            <div className="flex gap-2">
+        {/* clinic-level options. NOTE: this language field is the language
+            PATIENTS get on WhatsApp; the panel's own locale is the ⋯ menu. */}
+        <Card title={t("cardLangOptions")}>
+          <Row label={t("clinicLanguage")}>
+            <div className="flex shrink-0 gap-2">
               {(["hi", "en"] as const).map((l) => (
                 <button
                   key={l}
                   onClick={() => patchClinic({ language: l })}
-                  className={`h-11 min-w-[4.5rem] rounded-xl px-4 text-base font-semibold ${
+                  className={`h-11 min-w-[4rem] rounded-xl px-3 text-base font-semibold ${
                     data.clinic.language === l
                       ? "bg-primary text-white"
                       : "border border-line bg-surface text-muted"
                   }`}
                 >
-                  {l === "hi" ? "हिंदी" : "EN"}
+                  {l === "hi" ? t("langHi") : t("langEn")}
                 </button>
               ))}
             </div>
           </Row>
-          <Row label="गैप ऑफर / Gap offers">
+          <Row label={t("gapOffers")}>
             <Toggle on={gapOffers} onToggle={() => patchSetting("gap_offers", !gapOffers)} />
           </Row>
         </Card>
 
         {/* weekly timetable */}
-        <Card title="साप्ताहिक समय / Weekly timetable">
+        <Card title={t("cardTimetable")}>
           <div className="grid gap-2">
-            {tt.length === 0 && <p className="text-sm text-faint">कोई सत्र नहीं / none</p>}
+            {tt.length === 0 && <p className="text-sm text-faint">{t("noTimetableRows")}</p>}
             {tt.map((r, i) => (
               <div key={i} className="rounded-xl border border-line bg-canvas p-2.5">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-semibold text-ink">
-                    {WEEKDAYS[r.weekday]} · {r.name}
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-semibold text-ink">
+                    {t(WEEKDAY_KEYS[r.weekday] ?? "wd0")} · {r.name}
                   </span>
                   <button
                     onClick={() => setTt(tt.filter((_, idx) => idx !== i))}
-                    className="text-sm font-semibold text-danger"
+                    className="shrink-0 text-sm font-semibold text-danger"
                   >
-                    हटाएँ
+                    {t("remove")}
                   </button>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
-                  <TimeInput label="शुरू" value={r.start_time} onChange={(v) => patchRow(i, { start_time: v })} />
-                  <TimeInput label="अंत" value={r.end_time} onChange={(v) => patchRow(i, { end_time: v })} />
+                  <TimeInput
+                    label={t("startTime")}
+                    value={r.start_time}
+                    onChange={(v) => patchRow(i, { start_time: v })}
+                  />
+                  <TimeInput
+                    label={t("endTime")}
+                    value={r.end_time}
+                    onChange={(v) => patchRow(i, { end_time: v })}
+                  />
                   <label className="grid gap-1">
-                    <span className="px-0.5 text-[11px] text-faint">टोकन cap</span>
+                    <span className="truncate px-0.5 text-[11px] text-faint">{t("tokenCap")}</span>
                     <input
                       value={r.token_cap}
                       inputMode="numeric"
                       onChange={(e) =>
                         patchRow(i, { token_cap: Number(e.target.value.replace(/\D/g, "")) || 0 })
                       }
-                      className="h-11 rounded-lg border border-line bg-surface px-2 text-center text-base tabular-nums outline-none focus:border-primary"
+                      className="h-11 w-full rounded-lg border border-line bg-surface px-2 text-center text-base tabular-nums outline-none focus:border-primary"
                     />
                   </label>
                 </div>
@@ -180,19 +196,19 @@ export default function SettingsPage() {
                   { weekday: 0, name: "morning", start_time: "09:00", end_time: "13:00", token_cap: 40 },
                 ])
               }
-              className="btn-ghost h-touch w-full border-dashed"
+              className="btn-ghost h-touch w-full border-dashed px-3"
             >
-              ＋ सत्र जोड़ें / Add row
+              <span className="truncate">＋ {t("addTimetableRow")}</span>
             </button>
           </div>
         </Card>
 
         {/* change PIN */}
-        <Card title="PIN बदलें / Change PIN">
+        <Card title={t("cardChangePin")}>
           <input
             value={pin}
             onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            placeholder="नया 6-अंकों का PIN"
+            placeholder={t("newPinPlaceholder")}
             inputMode="numeric"
             className="field h-touch text-center text-2xl tracking-[0.4em]"
           />
@@ -200,12 +216,12 @@ export default function SettingsPage() {
 
         {err && (
           <p className="mb-3 rounded-xl bg-danger-soft px-4 py-2.5 text-center text-sm font-semibold text-danger">
-            {err}
+            {t(err)}
           </p>
         )}
 
         <button onClick={logout} className="btn-ghost mb-24 h-touch w-full text-danger">
-          {STRINGS.logout.hi}
+          {t("logout")}
         </button>
       </div>
 
@@ -214,9 +230,11 @@ export default function SettingsPage() {
         <button
           onClick={save}
           disabled={busy}
-          className="btn-primary h-next w-full text-xl disabled:opacity-60"
+          className="btn-primary h-next w-full px-4 text-xl disabled:opacity-60"
         >
-          {saved ? `✓ ${STRINGS.saved.hi}` : busy ? "…" : STRINGS.save.hi}
+          <span className="truncate">
+            {saved ? `✓ ${t("saved")}` : busy ? "…" : t("save")}
+          </span>
         </button>
       </div>
     </main>
@@ -250,7 +268,7 @@ function Field({
         value={value}
         inputMode={inputMode}
         onChange={(e) => onChange(e.target.value)}
-        className="h-12 rounded-xl border border-line bg-canvas px-3 text-base text-ink outline-none focus:border-primary"
+        className="h-12 w-full rounded-xl border border-line bg-canvas px-3 text-base text-ink outline-none focus:border-primary"
       />
     </label>
   );
@@ -267,12 +285,12 @@ function TimeInput({
 }) {
   return (
     <label className="grid gap-1">
-      <span className="px-0.5 text-[11px] text-faint">{label}</span>
+      <span className="truncate px-0.5 text-[11px] text-faint">{label}</span>
       <input
         type="time"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-11 rounded-lg border border-line bg-surface px-2 text-center text-base outline-none focus:border-primary"
+        className="h-11 w-full min-w-0 rounded-lg border border-line bg-surface px-1 text-center text-base outline-none focus:border-primary"
       />
     </label>
   );
@@ -280,8 +298,8 @@ function TimeInput({
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="text-base font-medium text-ink">{label}</span>
+    <div className="flex items-center justify-between gap-3">
+      <span className="min-w-0 text-base font-medium text-ink">{label}</span>
       {children}
     </div>
   );
@@ -291,7 +309,7 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   return (
     <button
       onClick={onToggle}
-      className={`relative h-8 w-14 rounded-full transition ${on ? "bg-primary" : "bg-neutral-bg"}`}
+      className={`relative h-8 w-14 shrink-0 rounded-full transition ${on ? "bg-primary" : "bg-neutral-bg"}`}
       aria-pressed={on}
     >
       <span

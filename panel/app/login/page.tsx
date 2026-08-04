@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, getToken, login } from "../lib/api";
-import { STRINGS } from "../lib/i18n";
+import { useLocale } from "../lib/locale";
 import { armSound } from "../lib/sound";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { t } = useLocale();
   const [slug, setSlug] = useState("");
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
@@ -41,13 +42,13 @@ export default function LoginPage() {
           <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-3xl font-bold text-white shadow-card">
             Q
           </div>
-          <h1 className="text-2xl font-bold text-ink">{STRINGS.appName.hi}</h1>
-          <p className="text-sm text-muted">{STRINGS.appName.en} · {STRINGS.login.hi}</p>
+          <h1 className="text-2xl font-bold text-ink">{t("appName")}</h1>
+          <p className="text-sm text-muted">{t("login")}</p>
         </div>
 
         <form onSubmit={submit} className="grid gap-4">
           <label className="grid gap-1.5">
-            <span className="px-1 text-sm font-medium text-muted">{STRINGS.slug.hi}</span>
+            <span className="px-1 text-sm font-medium text-muted">{t("slug")}</span>
             <input
               value={slug}
               onChange={(e) => setSlug(e.target.value)}
@@ -59,7 +60,7 @@ export default function LoginPage() {
             />
           </label>
           <label className="grid gap-1.5">
-            <span className="px-1 text-sm font-medium text-muted">{STRINGS.pin.hi}</span>
+            <span className="px-1 text-sm font-medium text-muted">{t("pin")}</span>
             <input
               value={pin}
               onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
@@ -72,16 +73,16 @@ export default function LoginPage() {
 
           {err && (
             <p className="rounded-xl bg-danger-soft px-4 py-2.5 text-center text-sm font-semibold text-danger">
-              {STRINGS.wrongPin.hi} · {STRINGS.wrongPin.en}
+              {t("wrongPin")}
             </p>
           )}
 
           <button
             type="submit"
             disabled={busy || slug.trim().length === 0 || pin.length < 6}
-            className="btn-primary h-16 w-full text-xl disabled:opacity-50"
+            className="btn-primary h-16 w-full px-4 text-xl disabled:opacity-50"
           >
-            {busy ? "…" : `${STRINGS.enter.hi} →`}
+            <span className="truncate">{busy ? "…" : `${t("enter")} →`}</span>
           </button>
         </form>
       </div>

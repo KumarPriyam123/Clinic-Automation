@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as api from "./lib/api";
 import { getClinic, getToken } from "./lib/api";
-import { STRINGS } from "./lib/i18n";
+import { useLocale } from "./lib/locale";
 import { armSound } from "./lib/sound";
 import { todayIST, useQueue, useTick } from "./lib/useQueue";
 import type { QueueEntry, QueueSnapshot } from "./lib/types";
@@ -14,6 +14,7 @@ import { NowServing } from "./components/NowServing";
 import { QueueRow } from "./components/QueueRow";
 import { NextButton } from "./components/NextButton";
 import { ActionSheet } from "./components/ActionSheet";
+import { OverflowMenu } from "./components/OverflowMenu";
 import { WalkinModal } from "./components/WalkinModal";
 import { SessionControls } from "./components/SessionControls";
 import { ErrorToast, OfflineBanner, ReconnectBar, StaleErrorScreen, UndoSnackbar } from "./components/Snackbar";
@@ -21,6 +22,7 @@ import { STALE_MS } from "./lib/useQueue";
 
 export default function LiveQueue() {
   const router = useRouter();
+  const { t } = useLocale();
   const [ready, setReady] = useState(false);
   const q = useQueue();
   const now = useTick(true);
@@ -29,6 +31,7 @@ export default function LiveQueue() {
   const [walkinOpen, setWalkinOpen] = useState(false);
   const [emergencyMode, setEmergencyMode] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!getToken()) router.replace("/login");
@@ -56,6 +59,7 @@ export default function LiveQueue() {
   const locked = q.offline || readOnly;
 
   async function hardReload() {
+    setMenuOpen(false);
     if ("serviceWorker" in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations();
       await Promise.all(regs.map((r) => r.unregister()));
@@ -102,27 +106,29 @@ export default function LiveQueue() {
 
       <div className="mx-auto w-full max-w-md px-3 pt-3">
         {/* top bar */}
-        <div className="mb-3 flex items-center justify-between px-1">
-          <div className="min-w-0">
+        <div className="mb-3 flex items-center justify-between gap-2 px-1">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-bold text-ink">{clinic?.name ?? "ClinicQ"}</p>
-            <p className="text-xs text-faint">
-              {clinic?.slug} · {STRINGS.appName.en}
+            <p className="truncate text-xs text-faint">
+              {clinic?.slug} · {t("appName")}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={() => setControlsOpen(true)}
-              className="flex h-11 items-center gap-1.5 rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-ink active:bg-canvas"
+              className="flex h-11 max-w-[9rem] items-center gap-1.5 rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-ink active:bg-canvas"
+              aria-label={t("controls")}
             >
-              ⚙ {STRINGS.controls.hi}
+              <span className="shrink-0">⚙</span>
+              <span className="truncate">{t("controlsShort")}</span>
             </button>
-            <Link
-              href="/settings"
-              className="flex h-11 w-11 items-center justify-center rounded-xl border border-line bg-surface text-lg active:bg-canvas"
-              aria-label={STRINGS.settings.en}
+            <button
+              onClick={() => setMenuOpen(true)}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-lg active:bg-canvas"
+              aria-label={t("more")}
             >
               ⋯
-            </Link>
+            </button>
           </div>
         </div>
 
@@ -130,7 +136,9 @@ export default function LiveQueue() {
           /* Offline >10min: hide queue entirely — old data is worse than no data */
           <StaleErrorScreen onReload={hardReload} />
         ) : session ? (
-          <div className="grid gap-3">
+          /* minmax(0,1fr) caps the track: a grid item's default min-width:auto
+             lets a wide child push the whole column past the viewport. */
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-3">
             <SessionBanner
               session={session}
               sessions={q.snap?.sessions}
@@ -146,17 +154,15 @@ export default function LiveQueue() {
             <button
               onClick={() => openWalkin(false)}
               disabled={locked}
-              className="flex min-h-touch w-full items-center justify-center gap-2 rounded-xl2 border-2 border-dashed border-primary/40 bg-primary-soft text-lg font-bold text-primary-ink active:bg-primary-soft/70 disabled:opacity-50"
+              className="flex min-h-touch w-full items-center justify-center gap-2 rounded-xl2 border-2 border-dashed border-primary/40 bg-primary-soft px-3 text-lg font-bold text-primary-ink active:bg-primary-soft/70 disabled:opacity-50"
             >
-              ＋ {STRINGS.addWalkin.hi}
+              <span className="shrink-0">＋</span>
+              <span className="truncate">{t("addWalkin")}</span>
             </button>
 
-            <section className="grid gap-2">
+            <section className="grid grid-cols-[minmax(0,1fr)] gap-2">
               {q.snap && q.snap.entries.length === 0 ? (
-                <div className="rounded-xl2 bg-surface px-5 py-10 text-center shadow-card">
-                  <p className="text-base font-semibold text-muted">{STRINGS.emptyQueue.hi}</p>
-                  <p className="mt-1 text-sm text-faint">{STRINGS.emptyHint.hi}</p>
-                </div>
+                <EmptyCard title={t("emptyQueue")} hint={t("emptyHint")} />
               ) : (
                 q.snap?.entries.map((e, i) => (
                   <QueueRow
@@ -174,26 +180,24 @@ export default function LiveQueue() {
         ) : q.day !== today ? (
           /* Previewing a day that has no session — always offer the way back. */
           <div className="mt-16 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
-            <p className="text-lg font-semibold text-ink">{STRINGS.noSessionThatDay.hi}</p>
-            <p className="mt-1 text-sm text-muted">{STRINGS.noSessionThatDay.en}</p>
+            <p className="text-lg font-semibold text-ink">{t("noSessionThatDay")}</p>
             <button className="btn-primary mt-5 h-touch px-6" onClick={() => q.setDay(today)}>
-              ← {STRINGS.today.hi}
+              ← {t("today")}
             </button>
           </div>
         ) : (
           <div className="mt-16 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
-            <p className="text-lg font-semibold text-ink">आज कोई सत्र नहीं</p>
-            <p className="mt-1 text-sm text-muted">No session scheduled today</p>
+            <p className="text-lg font-semibold text-ink">{t("noSessionToday")}</p>
             {(q.snap?.upcoming?.count ?? 0) > 0 && (
               <button
                 className="btn-primary mt-5 h-touch px-6"
                 onClick={() => q.snap?.upcoming && q.setDay(q.snap.upcoming.date)}
               >
-                {STRINGS.tomorrow.hi}: {q.snap?.upcoming?.count} →
+                {t("tomorrow")}: {q.snap?.upcoming?.count} →
               </button>
             )}
             <Link href="/settings" className="btn-ghost mt-5 inline-flex">
-              {STRINGS.settings.hi} →
+              {t("settings")} →
             </Link>
           </div>
         )}
@@ -208,7 +212,9 @@ export default function LiveQueue() {
       )}
 
       <UndoSnackbar visible={q.undoVisible} onUndo={q.doUndo} />
-      <ErrorToast message={q.error} onClose={q.clearError} />
+      <ErrorToast message={q.error ? t(q.error) : null} onClose={q.clearError} />
+
+      <OverflowMenu open={menuOpen} onClose={() => setMenuOpen(false)} onReload={hardReload} />
 
       <ActionSheet
         entry={activeRow}
@@ -242,5 +248,14 @@ export default function LiveQueue() {
         />
       )}
     </main>
+  );
+}
+
+function EmptyCard({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div className="rounded-xl2 bg-surface px-5 py-10 text-center shadow-card">
+      <p className="text-base font-semibold text-muted">{title}</p>
+      <p className="mt-1 text-sm text-faint">{hint}</p>
+    </div>
   );
 }

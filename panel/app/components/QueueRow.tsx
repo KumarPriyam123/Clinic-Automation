@@ -1,7 +1,7 @@
 "use client";
 
 import { clock, relEta } from "../lib/format";
-import { STRINGS } from "../lib/i18n";
+import { useLocale } from "../lib/locale";
 import type { QueueEntry } from "../lib/types";
 import { StatusChip } from "./StatusChip";
 
@@ -18,6 +18,7 @@ export function QueueRow({
   onTap: (e: QueueEntry) => void;
   disabled?: boolean;
 }) {
+  const { t, lang } = useLocale();
   return (
     <button
       onClick={() => !disabled && onTap(entry)}
@@ -26,9 +27,7 @@ export function QueueRow({
     >
       {/* token number = the patient's fixed identity at the desk */}
       <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-xl bg-canvas">
-        <span className="text-[10px] font-medium leading-none text-faint">
-          {STRINGS.token.hi}
-        </span>
+        <span className="text-[10px] font-medium leading-none text-faint">{t("token")}</span>
         <span className="text-xl font-bold leading-tight tabular-nums text-ink">
           {entry.token_number}
         </span>
@@ -37,17 +36,17 @@ export function QueueRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="truncate text-base font-semibold text-ink">
-            {entry.name || `${STRINGS.token.hi} #${entry.token_number}`}
+            {entry.name || `${t("token")} #${entry.token_number}`}
           </p>
           {entry.next_up && (
-            <span className="chip bg-consult-bg px-2 py-0.5 text-xs text-consult-fg">
-              ▶ अगला
+            <span className="chip shrink-0 bg-consult-bg px-2 py-0.5 text-xs text-consult-fg">
+              ▶ {t("nextUp")}
             </span>
           )}
         </div>
-        <p className="mt-0.5 text-sm text-muted">
-          {STRINGS.target.hi} {clock(entry.priority_time)} · {STRINGS.eta.hi}{" "}
-          <span className="font-medium text-ink">{relEta(entry.eta, now)}</span>
+        <p className="mt-0.5 text-[13px] leading-snug text-muted">
+          {t("target")} {clock(entry.priority_time)} · {t("eta")}{" "}
+          <span className="font-medium text-ink">{relEta(entry.eta, now, lang)}</span>
         </p>
       </div>
 

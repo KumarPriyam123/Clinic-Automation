@@ -4,6 +4,23 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import { chime } from "./sound";
 import type { QueueSnapshot } from "./types";
+import type { StringKey } from "@/lib/i18n";
+
+/**
+ * Backend rejection `reason` → panel dictionary key.
+ *
+ * The API's own `message` field is a bilingual "hi / en" string. Rendering it
+ * would put both languages on a screen the user just set to one, so the panel
+ * translates the machine-readable reason itself and never displays server prose.
+ */
+const REASON_STRING: Record<string, StringKey> = {
+  cap: "sessionFull",
+  closed: "sessionClosedNote",
+  past_end: "sessionTimePassed",
+  not_today: "viewOnly",
+  session_ended: "sessionTimePassed",
+  invalid_transition: "invalidTransition",
+};
 
 const CACHE_KEY = "clinicq.lastQueue";
 const POLL_MS = 4000;
@@ -65,7 +82,8 @@ export interface QueueController {
   run: (fn: () => Promise<QueueSnapshot>) => Promise<void>;
   doUndo: () => Promise<void>;
   undoVisible: boolean;
-  error: string | null;
+  /** Dictionary key, not prose — the view resolves it in the current locale. */
+  error: StringKey | null;
   clearError: () => void;
 }
 
@@ -80,7 +98,7 @@ export function useQueue(): QueueController {
   const [loading, setLoading] = useState(true);
   const [newFlash, setNewFlash] = useState(0);
   const [undoVisible, setUndoVisible] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<StringKey | null>(null);
 
   const prevSig = useRef<string>(arrivalSignature(loadCache()));
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -163,8 +181,9 @@ export function useQueue(): QueueController {
       } catch (e) {
         if (e instanceof api.ApiError) {
           if (e.status === 401) return;
-          const d = e.detail as { message?: string; reason?: string } | null;
-          setError(d?.message ?? (typeof e.detail === "string" ? e.detail : "कुछ गड़बड़ / error"));
+          const d = e.detail as { reason?: string } | null;
+          const key = d?.reason ? REASON_STRING[d.reason] : undefined;
+          setError(key ?? "genericError");
         } else {
           setOffline(true);
         }
