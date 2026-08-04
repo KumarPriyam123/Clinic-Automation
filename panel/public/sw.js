@@ -1,24 +1,92 @@
 /* ClinicQ panel service worker.
  *
- * Strategy is deliberately small (CLAUDE.md: no over-building):
- *  - App shell (navigation + static assets): cache-first with background update,
- *    so the panel launches instantly and installs as a PWA.
- *  - API calls (/panel/*): NEVER cached here — the live queue owns its own
- *    freshness (4s poll) and its offline fallback (last snapshot in
- *    localStorage). Caching queue responses in the SW would risk showing a stale
- *    queue as if live. So we just pass them through.
+ * WHY THIS IS SHAPED THE WAY IT IS
  *
- * IMPORTANT: bump CACHE_VERSION on every deploy so the activate handler evicts
- * the stale shell immediately.  A stale cached bundle is indistinguishable from
- * live data and is a silent pilot-breaking failure (see WA_ROUNDTRIP.md).
+ * Serving stale code has now bitten this project three times: once showing
+ * two-day-old session data while the database was correct, and twice during P8
+ * handing back JS chunks from a previous build — which cost two false
+ * diagnoses. A receptionist running last week's JS against this week's API gets
+ * no signal that anything is wrong, and neither does the developer debugging
+ * it. Freshness is therefore a correctness property here, not an optimisation.
+ *
+ * The strategy is per request class, and each class is deliberate:
+ *
+ *   /_next/static/**   cache-first   Content-hashed, so a hit is by definition
+ *                                    the right bytes. Safe and worth caching.
+ *   documents + RSC    network-first Not hashed. A stale document references
+ *                                    chunk names that no longer exist — that is
+ *                                    the actual bug. Cache is fallback only.
+ *   API                network-only  Never cached, in either URL shape. A stale
+ *                                    queue rendered as live is pilot-breaking.
+ *   other same-origin  cache-first   Icons, manifest. Versioned by cache name.
+ *
+ * The cache name comes from the build ID (see next.config.mjs), so every deploy
+ * lands in a fresh cache and activate() evicts the rest. There is no constant
+ * to remember to bump.
+ *
+ * Offline behaviour is preserved on purpose (CLAUDE.md: offline = cached
+ * read-only queue + reconnecting bar). Documents fall back to cache, the shell
+ * is precached, and the queue's own last snapshot lives in localStorage.
  */
-const CACHE_VERSION = "v3";
-const CACHE = `clinicq-shell-${CACHE_VERSION}`;
+
+// SwRegister registers "/sw.js?v=<BUILD_ID>". Reading it back here ties the
+// cache name to the build without a second source of truth.
+const VERSION = new URL(self.location.href).searchParams.get("v") || "dev";
+const CACHE = `clinicq-${VERSION}`;
+
 const SHELL = ["/", "/login", "/settings", "/manifest.webmanifest", "/icons/icon-192.png"];
+
+/* --------------------------------------------------------------------------
+ * Request classification.
+ *
+ * These four predicates are pure and are mirrored by panel/sw.test.mjs. If you
+ * change one, change it there too — the API matcher silently broke once when
+ * the /api proxy was added, which is why both URL shapes are tested.
+ * ----------------------------------------------------------------------- */
+
+/**
+ * Must go straight to the network and never touch the cache.
+ *
+ * Three shapes, all of which are real deployments:
+ *   /api/*     proxy mode — same-origin rewrite through next.config.mjs
+ *   /panel/*   direct mode — NEXT_PUBLIC_API_URL points at this origin
+ *   any cross-origin request — direct mode against the droplet
+ */
+function isNetworkOnly(pathname, requestHostname, swHostname) {
+  if (pathname.startsWith("/api/")) return true; // proxy mode
+  if (pathname.startsWith("/panel/")) return true; // direct mode
+  if (pathname === "/healthz") return true;
+  if (requestHostname !== swHostname) return true; // absolute backend URL
+  return false;
+}
+
+/** Content-hashed build output: a cache hit is always the correct bytes. */
+function isStaticAsset(pathname) {
+  return pathname.startsWith("/_next/static/");
+}
+
+/**
+ * A document or an RSC payload — anything whose staleness can point the app at
+ * chunk names that no longer exist.
+ */
+function isDocumentLike(mode, accept, hasRscParam, hasRscHeader) {
+  if (mode === "navigate") return true;
+  if (hasRscHeader) return true;
+  if (hasRscParam) return true;
+  if (accept && accept.includes("text/html")) return true;
+  return false;
+}
+
+/* -------------------------------------------------------------------------- */
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()),
+    caches.open(CACHE).then(async (cache) => {
+      // Best-effort: one missing URL must not fail the whole install and leave
+      // the old worker in charge, which is the failure this file exists to fix.
+      await Promise.all(SHELL.map((u) => cache.add(u).catch(() => {})));
+      await self.skipWaiting();
+    }),
   );
 });
 
@@ -31,24 +99,35 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-/**
- * Returns true when this request must bypass the cache and go straight to the
- * network.  Exported as a named function so sw.test.mjs can assert it without
- * a real SW environment.
- *
- * Rules (in priority order):
- *  1. /api/* — proxy mode: same-origin rewrites from Next.js; must never cache.
- *  2. /panel/* — direct mode: NEXT_PUBLIC_API_URL pointing at the backend.
- *  3. Cross-origin — absolute backend URL; let the backend handle its own caching.
- *
- * Both /api/* and /panel/* must be listed.  In proxy mode the browser only
- * ever sends /api/* (same-origin), so the cross-origin check would not fire.
- */
-function shouldPassToNetwork(pathname, requestHostname, swHostname) {
-  if (pathname.startsWith("/api/")) return true;    // proxy mode
-  if (pathname.startsWith("/panel/")) return true;  // direct mode
-  if (requestHostname !== swHostname) return true;
-  return false;
+async function cacheFirst(req) {
+  const cached = await caches.match(req);
+  if (cached) return cached;
+  const res = await fetch(req);
+  if (res && res.ok) {
+    const copy = res.clone();
+    caches.open(CACHE).then((c) => c.put(req, copy));
+  }
+  return res;
+}
+
+async function networkFirst(req) {
+  try {
+    const res = await fetch(req);
+    if (res && res.ok) {
+      const copy = res.clone();
+      caches.open(CACHE).then((c) => c.put(req, copy));
+    }
+    return res;
+  } catch (err) {
+    // Offline: serve the last good copy, then the app shell. The queue itself
+    // renders read-only from its localStorage snapshot with the reconnecting
+    // bar showing, so this path keeps documented offline behaviour intact.
+    const cached = await caches.match(req);
+    if (cached) return cached;
+    const shell = await caches.match("/");
+    if (shell) return shell;
+    throw err;
+  }
 }
 
 self.addEventListener("fetch", (event) => {
@@ -56,33 +135,21 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
-  // API traffic: pass straight to network. See shouldPassToNetwork() above.
-  if (shouldPassToNetwork(url.pathname, url.hostname, self.location.hostname)) return;
 
-  // Navigations: network-first so fresh HTML wins, fall back to cached shell.
-  if (req.mode === "navigate") {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy));
-          return res;
-        })
-        .catch(() => caches.match(req).then((m) => m || caches.match("/"))),
-    );
+  // API: pass through untouched. Not respondWith — the browser handles it.
+  if (isNetworkOnly(url.pathname, url.hostname, self.location.hostname)) return;
+
+  if (isStaticAsset(url.pathname)) {
+    event.respondWith(cacheFirst(req));
     return;
   }
 
-  // Static assets: cache-first, refresh in the background.
-  event.respondWith(
-    caches.match(req).then(
-      (cached) =>
-        cached ||
-        fetch(req).then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy));
-          return res;
-        }),
-    ),
+  const documentLike = isDocumentLike(
+    req.mode,
+    req.headers.get("accept"),
+    url.searchParams.has("_rsc"),
+    Boolean(req.headers.get("RSC")),
   );
+
+  event.respondWith(documentLike ? networkFirst(req) : cacheFirst(req));
 });
