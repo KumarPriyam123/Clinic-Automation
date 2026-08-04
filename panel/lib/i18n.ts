@@ -47,6 +47,16 @@ export const strings = {
     en: "Future session — view only",
   },
   noSessionThatDay: { hi: "उस दिन कोई सत्र नहीं", en: "No session that day" },
+  noSessionTomorrow: { hi: "कल क्लिनिक बंद है", en: "Clinic closed tomorrow" },
+  noSessionTomorrowHint: {
+    hi: "उस दिन के लिए कोई सत्र तय नहीं है — सेटिंग में साप्ताहिक समय देखें",
+    en: "No session is scheduled that weekday — check the weekly timetable in Settings",
+  },
+  noBookingsYet: { hi: "अभी कोई बुकिंग नहीं", en: "No bookings yet" },
+  noBookingsYetHint: {
+    hi: "इस सत्र के लिए बुकिंग आते ही यहाँ दिखेंगी",
+    en: "Bookings for this session will appear here as they come in",
+  },
   noSessionToday: { hi: "आज कोई सत्र नहीं", en: "No session today" },
   sessionTimePassed: {
     hi: "यह सत्र का समय बीत चुका है — कल का सत्र अपने आप खुलेगा",

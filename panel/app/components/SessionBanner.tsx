@@ -2,7 +2,7 @@
 
 import { clock } from "../lib/format";
 import { useLocale } from "../lib/locale";
-import type { SessionMeta, SessionListItem, Upcoming } from "../lib/types";
+import type { SessionMeta, SessionListItem } from "../lib/types";
 import type { StringKey } from "@/lib/i18n";
 
 const SESSION_KEY: Record<string, StringKey> = {
@@ -29,45 +29,20 @@ const STATUS_KEY: Record<string, StringKey> = {
 export function SessionBanner({
   session,
   sessions,
-  upcoming,
-  day,
-  today,
   onSwitch,
-  onDay,
 }: {
   session: SessionMeta;
   sessions?: SessionListItem[];
-  upcoming?: Upcoming;
-  /** Day currently in view, ISO "YYYY-MM-DD" (IST). */
-  day: string;
-  today: string;
   onSwitch: (id: string) => void;
-  onDay: (date: string) => void;
 }) {
   const { t } = useLocale();
   const nameKey = SESSION_KEY[session.name];
   const label = nameKey ? t(nameKey) : session.name;
   const statusKey = STATUS_KEY[session.status];
   const avgMin = Math.round(session.avg_consult_s / 60);
-  const viewingToday = day === today;
-  // Show the day tabs whenever there is something to switch to: bookings
-  // already sitting in tomorrow's queue, or the receptionist is over there.
-  const showDays = !viewingToday || (upcoming?.count ?? 0) > 0;
 
   return (
     <header className="min-w-0 rounded-xl2 bg-surface p-4 shadow-card">
-      {showDays && (
-        <div className="mb-3 flex items-center gap-2">
-          <DayTab active={viewingToday} label={t("today")} onClick={() => onDay(today)} />
-          <DayTab
-            active={!viewingToday}
-            label={t("tomorrow")}
-            badge={upcoming?.count}
-            onClick={() => upcoming && onDay(upcoming.date)}
-          />
-        </div>
-      )}
-
       {/* The stats sit on their own full-width row rather than beside the title.
           English labels run wider than their Devanagari counterparts ("Waiting"
           vs the Hindi equivalent), and side-by-side they blew the header past
@@ -119,38 +94,6 @@ export function SessionBanner({
         </div>
       )}
     </header>
-  );
-}
-
-function DayTab({
-  active,
-  label,
-  badge,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  badge?: number;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex min-h-touch flex-1 items-center justify-center gap-1.5 rounded-xl px-3 text-[15px] font-bold transition ${
-        active ? "bg-primary text-white" : "border border-line bg-canvas text-muted"
-      }`}
-    >
-      <span className="truncate">{label}</span>
-      {badge !== undefined && badge > 0 && (
-        <span
-          className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-bold tabular-nums ${
-            active ? "bg-white/25 text-white" : "bg-primary text-white"
-          }`}
-        >
-          {badge}
-        </span>
-      )}
-    </button>
   );
 }
 

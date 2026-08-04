@@ -7,8 +7,9 @@ import * as api from "./lib/api";
 import { getClinic, getToken } from "./lib/api";
 import { useLocale } from "./lib/locale";
 import { armSound } from "./lib/sound";
-import { todayIST, useQueue, useTick } from "./lib/useQueue";
+import { dayIST, todayIST, useQueue, useTick } from "./lib/useQueue";
 import type { QueueEntry, QueueSnapshot } from "./lib/types";
+import { DayTabs } from "./components/DayTabs";
 import { SessionBanner } from "./components/SessionBanner";
 import { NowServing } from "./components/NowServing";
 import { QueueRow } from "./components/QueueRow";
@@ -43,6 +44,11 @@ export default function LiveQueue() {
   const sid = session?.id ?? q.sessionId ?? null;
   const isOpen = session?.status === "open";
   const today = todayIST();
+  const viewingToday = q.day === today;
+  // The tomorrow tab must have a destination even before any booking exists,
+  // so fall back to a locally computed date when `upcoming` is absent.
+  const tomorrow = q.snap?.upcoming?.date ?? dayIST(1);
+  const tomorrowCount = q.snap?.upcoming?.count ?? 0;
   // A future day is a read-only preview — you cannot serve, admit or mark
   // present a patient in a session that has not happened yet. Controls stay
   // visible but disabled so the reason is obvious.
@@ -132,6 +138,17 @@ export default function LiveQueue() {
           </div>
         </div>
 
+        {/* Day switcher — always rendered, even with nothing booked tomorrow and
+            even when tomorrow has no session. A control that comes and goes with
+            the data reads as a malfunction. */}
+        <DayTabs
+          day={q.day}
+          today={today}
+          tomorrow={tomorrow}
+          tomorrowCount={tomorrowCount}
+          onDay={q.setDay}
+        />
+
         {isStale ? (
           /* Offline >10min: hide queue entirely — old data is worse than no data */
           <StaleErrorScreen onReload={hardReload} />
@@ -142,11 +159,7 @@ export default function LiveQueue() {
             <SessionBanner
               session={session}
               sessions={q.snap?.sessions}
-              upcoming={q.snap?.upcoming}
-              day={q.day}
-              today={today}
               onSwitch={(id) => q.setSessionId(id)}
-              onDay={q.setDay}
             />
             <NowServing serving={q.snap?.now_serving ?? null} now={now} />
 
@@ -162,7 +175,10 @@ export default function LiveQueue() {
 
             <section className="grid grid-cols-[minmax(0,1fr)] gap-2">
               {q.snap && q.snap.entries.length === 0 ? (
-                <EmptyCard title={t("emptyQueue")} hint={t("emptyHint")} />
+                <EmptyCard
+                  title={viewingToday ? t("emptyQueue") : t("noBookingsYet")}
+                  hint={viewingToday ? t("emptyHint") : t("noBookingsYetHint")}
+                />
               ) : (
                 q.snap?.entries.map((e, i) => (
                   <QueueRow
@@ -177,25 +193,25 @@ export default function LiveQueue() {
               )}
             </section>
           </div>
-        ) : q.day !== today ? (
-          /* Previewing a day that has no session — always offer the way back. */
-          <div className="mt-16 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
-            <p className="text-lg font-semibold text-ink">{t("noSessionThatDay")}</p>
+        ) : !viewingToday ? (
+          /* The clinic is simply closed that weekday — distinct from "session
+             exists, nobody booked". Always offer the way back. */
+          <div className="mt-10 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
+            <p className="text-lg font-semibold text-ink">
+              {q.day === tomorrow ? t("noSessionTomorrow") : t("noSessionThatDay")}
+            </p>
+            {q.day === tomorrow && (
+              <p className="mt-1 text-sm text-muted">{t("noSessionTomorrowHint")}</p>
+            )}
             <button className="btn-primary mt-5 h-touch px-6" onClick={() => q.setDay(today)}>
               ← {t("today")}
             </button>
           </div>
         ) : (
-          <div className="mt-16 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
+          /* The tomorrow shortcut that used to live here is now the day tab,
+             which is always on screen. */
+          <div className="mt-10 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
             <p className="text-lg font-semibold text-ink">{t("noSessionToday")}</p>
-            {(q.snap?.upcoming?.count ?? 0) > 0 && (
-              <button
-                className="btn-primary mt-5 h-touch px-6"
-                onClick={() => q.snap?.upcoming && q.setDay(q.snap.upcoming.date)}
-              >
-                {t("tomorrow")}: {q.snap?.upcoming?.count} →
-              </button>
-            )}
             <Link href="/settings" className="btn-ghost mt-5 inline-flex">
               {t("settings")} →
             </Link>
