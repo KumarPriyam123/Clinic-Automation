@@ -187,6 +187,8 @@ export default function LiveQueue() {
                     position={i}
                     now={now}
                     disabled={locked}
+                    /* Rule: no relative countdown on a session that isn't today. */
+                    showRelativeEta={session.date === today}
                     onTap={setActiveRow}
                   />
                 ))
@@ -208,8 +210,6 @@ export default function LiveQueue() {
             </button>
           </div>
         ) : (
-          /* The tomorrow shortcut that used to live here is now the day tab,
-             which is always on screen. */
           <div className="mt-10 rounded-xl2 bg-surface px-6 py-12 text-center shadow-card">
             <p className="text-lg font-semibold text-ink">{t("noSessionToday")}</p>
             <Link href="/settings" className="btn-ghost mt-5 inline-flex">

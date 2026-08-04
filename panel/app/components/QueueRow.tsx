@@ -11,12 +11,16 @@ export function QueueRow({
   now,
   onTap,
   disabled,
+  showRelativeEta,
 }: {
   entry: QueueEntry;
   position: number;
   now: number;
   onTap: (e: QueueEntry) => void;
   disabled?: boolean;
+  /** False for any session that is not today: a countdown of "10h 1m" next to
+   * an absolute 9:00 am is noise, and reads as a bug. Show the clock only. */
+  showRelativeEta: boolean;
 }) {
   const { t, lang } = useLocale();
   return (
@@ -46,11 +50,18 @@ export function QueueRow({
         </div>
         <p className="mt-0.5 text-[13px] leading-snug text-muted">
           {t("target")} {clock(entry.priority_time)} · {t("eta")}{" "}
-          <span className="font-medium text-ink">{relEta(entry.eta, now, lang)}</span>
+          <span className="font-medium text-ink">
+            {showRelativeEta ? relEta(entry.eta, now, lang) : clock(entry.eta)}
+          </span>
         </p>
       </div>
 
-      <StatusChip status={entry.status} graceUntil={entry.grace_until} now={now} />
+      <StatusChip
+        status={entry.status}
+        graceUntil={entry.grace_until}
+        now={now}
+        showCountdown={showRelativeEta}
+      />
     </button>
   );
 }

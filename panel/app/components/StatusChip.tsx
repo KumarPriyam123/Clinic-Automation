@@ -20,14 +20,18 @@ export function StatusChip({
   status,
   graceUntil,
   now,
+  showCountdown = true,
 }: {
   status: EntryStatus;
   graceUntil?: string | null;
   now?: number;
+  /** False on a session that is not today — a live mm:ss countdown against a
+   * future date is meaningless and reads as a bug. Same rule as the ETA. */
+  showCountdown?: boolean;
 }) {
   const { t } = useLocale();
   const m = MAP[status] ?? MAP.booked;
-  const isGrace = status === "skipped" && graceUntil;
+  const isGrace = showCountdown && status === "skipped" && graceUntil;
   return (
     <span className={`chip shrink-0 ${m.cls}`}>
       <span
