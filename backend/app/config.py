@@ -52,7 +52,12 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "dev-secret-change-me"
     ENV: str = "dev"
 
-    # Panel (Next.js) origins allowed to call the API (CORS). Comma-separated in env.
+    # Panel (Next.js) origins allowed to call the API (CORS).
+    # MUST be a JSON array in env, not a comma-separated string — this is a
+    # complex type, so pydantic-settings json-decodes it and a bare
+    # "a.example,b.example" raises SettingsError at import time and the app
+    # never starts:
+    #     PANEL_ORIGINS=["https://app.clinicq.kpriyam.me"]
     PANEL_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # Scheduler single-instance guard (DEPLOY.md §single-instance). APScheduler

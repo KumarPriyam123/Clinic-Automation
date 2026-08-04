@@ -18,9 +18,17 @@ db-reset: guard-local-db
 db-diff:
 	supabase db diff
 
-# Backend test suite (set DATABASE_URL_TEST to include the DB round-trip test).
-test:
-	cd backend && python -m pytest
+# THE test command. Starts the disposable Postgres, sets DATABASE_URL_TEST, and
+# runs the suite with REQUIRE_PG_TESTS=1 so a skipped database test is a
+# failure. Bare `pytest` reports "130 passed, 16 skipped" with a green bar —
+# that green omits every undo test, the panel routes, and the pg parity and
+# concurrency tests. Use this target, not pytest.
+test: test-sw
+	@sh scripts/run_tests.sh
+
+# Service worker request-classification test (no framework, plain node).
+test-sw:
+	node panel/sw.test.mjs
 
 lint:
 	cd backend && ruff check . && black --check .

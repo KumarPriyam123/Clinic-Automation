@@ -11,7 +11,7 @@ The product's one job: **no patient waits blind, no doctor sits idle, no enquiry
 ## Repo layout
 
 ```
-clinicq/
+Clinic-Automation/          # repo root (NOT "clinicq/")
   CLAUDE.md
   backend/            # FastAPI, Python 3.11
     app/
@@ -27,19 +27,31 @@ clinicq/
     tests/
   panel/              # Next.js 14 app router, TS strict, Tailwind, PWA
   supabase/migrations # full DDL lives here (source of truth for schema)
-  scripts/            # simulate_session.py, qr_poster.py
+  scripts/            # create_clinic, dev_reset_session, migrate, qr_poster,
+                      # reset_avg_consult, seed_demo_queue, simulate_session,
+                      # wa_preflight, guard_local_db.sh, run_tests.sh
   docs/               # DEPLOY.md, ONBOARDING.md
 ```
 
 ## Commands
 
-- Backend dev: `cd backend && uvicorn app.main:app --reload`
-- Tests: `cd backend && pytest` (must be green before every commit)
+On Git Bash (Windows), invoke Python tools as `python -m <tool>` — bare `uvicorn` / `pytest` may resolve to a different interpreter than the project venv.
+
+- Backend dev: `cd backend && python -m uvicorn app.main:app --reload` (serves on :8000)
+- **Tests: `make test`** — must be green before every commit. See below; do not use bare `pytest`.
 - Lint/format: `ruff check . && black .`
-- DB: `make db-reset` (reset + seed demo clinic, slug `demo`, PIN `123456`)
+- DB: `make db-reset` (reset + seed a demo clinic, slug `demo`, PIN `123456`). Guarded: refuses to run unless `DATABASE_URL` is localhost. The live pilot clinic is `clinicq-test`, **not** `demo` — `demo` exists only in local seed data, and it must stay that way.
 - Panel dev: `cd panel && npm run dev`
 - WhatsApp smoke test: `python -m app.wa.smoke +91XXXXXXXXXX`
 - Session simulator (demo/QA): `python scripts/simulate_session.py --dry-run`
+
+### Why `make test` and not `pytest`
+
+Bare `pytest` reports **130 passed, 16 skipped** and prints a green bar with exit code 0. Those 16 skips are not marginal: they are every `undo` test, the panel route tests, and the Postgres parity and concurrency tests — most of what actually touches the database. A green bar that omits them is a false green, and it is exactly what a deploy decision gets made on.
+
+`make test` starts the disposable Postgres (`clinicq_pg`), sets `DATABASE_URL_TEST`, and runs the suite with `REQUIRE_PG_TESTS=1`. Expected result: **146 passed, 0 skipped.** It also runs `panel/sw.test.mjs`.
+
+`REQUIRE_PG_TESTS=1` turns "skipped because there is no database" into a hard failure (exit 4, `backend/tests/conftest.py`). Set it in CI and before any deploy.
 
 ## Architecture (fixed — do not re-litigate)
 
@@ -51,7 +63,15 @@ clinicq/
 
 ## The three queue rules (LAW — never violate)
 
-1. **Sort by `priority_time`, not booking order.** `priority_time = max(requested_time, now)` — the `max` blocks claiming past times to leapfrog people already waiting. "Come now / next available" ⇒ `priority_time = now`. Tie-break: `booked_at` (FIFO). Cancel = row leaves the ordering; everyone behind shifts up.
+1. **Sort by `priority_time`, not booking order.**
+   ```
+   floor          = max(now, session.start_at)
+   priority_time  = floor                         # "come now / next available"
+   priority_time  = max(requested_time, floor)    # a specific requested time
+   ```
+   Two separate jobs in that one `max`. `now` blocks claiming a past time to leapfrog people already waiting. **`session.start_at` blocks booking into a session that has not opened — or has already ended.** Omitting the session floor is what once booked a patient into a dead session; it is part of the rule, not a patch on top of it. Tie-break: `booked_at` (FIFO). Cancel = row leaves the ordering; everyone behind shifts up.
+
+   When the clamp moves a patient's requested time by more than the notice threshold, the flow tells them so in one plain sentence (`adjust_reason`). Applying it silently is what makes someone who asked for 11:30 and got 5:00 PM believe the system is broken.
 
 2. **ETA = forward walk from the doctor's live clock.**
    ```
@@ -76,7 +96,12 @@ clinicq/
   | Passed over when absent | instant | 0 — evaluated at NEXT, no timer runs |
   | Grace after skip | short | `G = max(10 min, 2 × avg_consult)`; arrive within G ⇒ served at the very next NEXT (head of line); one extension max |
   | Hard expiry | session end | any BOOKED/SKIPPED still absent ⇒ EXPIRED, `strikes += 1`, rebook nudge |
-- On every DONE: `avg_consult_s = round(0.7 × avg + 0.3 × actual)`; `doctor_free_at = now`.
+- On every DONE: `doctor_free_at = now`, and the rolling average learns from the consult — **but only if the duration is sane**:
+  ```
+  if 30s <= actual <= 2700s:   avg_consult_s = round(0.7 × avg + 0.3 × actual)
+  else:                        avg_consult_s unchanged  (log consult_out_of_range)
+  ```
+  The bounds are part of the rule. A forgotten NEXT tap once produced a 26-hour "consult" that permanently poisoned the average and corrupted every ETA after it. Below 30s is a mis-tap, not a consult; above 45 min assume the doctor forgot to tap. The patient is still marked DONE and still counted in `consults_done` — only the average update is skipped.
 
 ## Gap pull-forward (doctor never idles)
 
@@ -108,6 +133,16 @@ grace `max(10m, 2×avg)` · gap threshold 10 min · gap-offer expiry 5 min · ET
 | `conversations` | per (wa_number, clinic_id) flow state + context jsonb |
 
 Entry status enum: `booked|arrived|called|in_consult|done|skipped|expired|cancelled`. Session status: `scheduled|open|paused|closed|cancelled`. All timestamps `timestamptz` UTC; display in `Asia/Kolkata`.
+
+### `timetable` vs `sessions` — two layers, not one
+
+This trips people up, so it is written down explicitly.
+
+- **`timetable` is a weekly template.** One row per (clinic, weekday, name): "Mon morning 09:00–13:00, cap 40". It holds no dates and no queue.
+- **`sessions` are dated instances stamped from that template.** The `stamp_daily` job (00:05 IST) materializes sessions for **today + 2 days**, `insert ... on conflict (clinic_id, date, name) do nothing`.
+- **Stamping is create-only.** The `do nothing` is the whole point: a session that already exists is never rewritten, so a live queue cannot be mutated out from under the receptionist by a background job.
+
+The consequence that surprises people: **editing the timetable does not change an already-stamped session.** Change Monday's hours in Settings and today's — and the next two days' — sessions keep the hours they were stamped with. The edit takes effect from the first day not yet stamped. That is intended, not a bug: sessions carry live queue state, and retroactively moving `start_at` would move every `priority_time` floor (queue rule 1) under patients who are already booked. To change today, edit the session, not the template.
 
 ## WhatsApp layer
 
@@ -157,7 +192,13 @@ Audience: a 45-year-old receptionist on a cheap Android, one thumb, interrupted 
 
 `DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY, WA_TOKEN, WA_PHONE_NUMBER_ID, WA_VERIFY_TOKEN, WA_APP_SECRET, LLM_PROVIDER, LLM_API_KEY, JWT_SECRET, PANEL_ORIGINS, ENV`
 
-`PANEL_ORIGINS` is the CORS allow-list for the panel. A new panel origin that is missing from it fails **in the browser, before the request is sent** — which looks like nothing at all unless the panel classifies its errors (see Panel principles).
+`PANEL_ORIGINS` is the CORS allow-list for the panel, and it has two sharp edges:
+
+- **It is a JSON array, not a comma-separated string.** It is typed `list[str]`, so pydantic-settings json-decodes it; `PANEL_ORIGINS=https://a,https://b` raises `SettingsError` at import time and the app never starts.
+  ```
+  PANEL_ORIGINS=["https://app.clinicq.kpriyam.me","http://localhost:3000"]
+  ```
+- **A missing origin fails in the browser, before the request is sent.** There is no server log, no status code, nothing — which reads as "the PIN stopped working" unless the panel classifies its errors (see Panel principles). After moving the panel to a new domain, verify with a preflight rather than assuming: `curl -i -X OPTIONS <api>/panel/login -H 'Origin: <panel origin>' -H 'Access-Control-Request-Method: POST'`.
 
 ## v1 scope guard — do NOT build (even if it seems helpful)
 
@@ -165,7 +206,7 @@ Billing · pharmacy/inventory · prescriptions or any EMR/medical data storage �
 
 ## Working agreements for every session
 
-1. Run the relevant tests before claiming a task done; `pytest` green before commit.
+1. Run the relevant tests before claiming a task done; **`make test` green (146 passed, 0 skipped) before commit.** Bare `pytest` is a false green — see Commands.
 2. If a requested change would violate the three queue rules, the LLM boundaries, or the scope guard — say so and propose the compliant alternative instead of silently complying.
 3. Prefer small, reviewable commits per phase (P0–P7 in the build plan).
 4. Patient-facing copy: never hardcode strings outside `wa/templates.py`; always add both `hi` and `en`.
