@@ -2,9 +2,31 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ApiError, getToken, login } from "../lib/api";
+import { ApiError, NetworkError, getToken, login } from "../lib/api";
 import { useLocale } from "../lib/locale";
 import { armSound } from "../lib/sound";
+import type { StringKey } from "@/lib/i18n";
+
+/** What actually went wrong, never a guess.
+ *
+ * `wrongPin` is the ONLY message allowed on a 401, and 401 is the only thing
+ * allowed to produce it. The panel used to show it for every failure — a CORS
+ * block on a new origin then read as "your PIN stopped working", which is the
+ * one thing that was never wrong. */
+interface LoginError {
+  key: StringKey;
+  /** HTTP status, shown small and muted so a clinic's screenshot is diagnostic. */
+  status?: number;
+}
+
+function classify(e: unknown): LoginError {
+  if (e instanceof NetworkError) return { key: "cannotReachServer" };
+  if (e instanceof ApiError) {
+    if (e.status === 401) return { key: "wrongPin" };
+    return { key: "serverError", status: e.status };
+  }
+  return { key: "serverError" };
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,7 +34,7 @@ export default function LoginPage() {
   const [slug, setSlug] = useState("");
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(false);
+  const [err, setErr] = useState<LoginError | null>(null);
 
   useEffect(() => {
     if (getToken()) router.replace("/");
@@ -22,14 +44,13 @@ export default function LoginPage() {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
-    setErr(false);
+    setErr(null);
     try {
       armSound(); // first user gesture — unlock the arrival chime for the queue
       await login(slug.trim(), pin.trim());
       router.replace("/");
     } catch (e) {
-      setErr(e instanceof ApiError && e.status === 401);
-      if (!(e instanceof ApiError)) setErr(true);
+      setErr(classify(e));
     } finally {
       setBusy(false);
     }
@@ -73,7 +94,10 @@ export default function LoginPage() {
 
           {err && (
             <p className="rounded-xl bg-danger-soft px-4 py-2.5 text-center text-sm font-semibold text-danger">
-              {t("wrongPin")}
+              {t(err.key)}
+              {err.status !== undefined && (
+                <span className="ml-1.5 font-normal opacity-70">HTTP {err.status}</span>
+              )}
             </p>
           )}
 

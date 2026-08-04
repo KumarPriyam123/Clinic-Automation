@@ -38,6 +38,7 @@ export function logout() {
   window.location.href = "/login";
 }
 
+/** The server answered, and said no. `status` is a real HTTP status. */
 export class ApiError extends Error {
   status: number;
   detail: unknown;
@@ -45,6 +46,24 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
     this.detail = detail;
+  }
+}
+
+/**
+ * The request never reached the server, or the answer was unreadable: DNS
+ * failure, offline radio, a CORS block on a new panel origin, a TLS error.
+ *
+ * This class exists because collapsing it into ApiError is what let the login
+ * screen tell a clinic their PIN was wrong when the browser had in fact refused
+ * to send the request at all. "The server said no" and "there was no server"
+ * are different facts and the person reading the screen cannot tell them apart
+ * unless the code does.
+ */
+export class NetworkError extends Error {
+  cause: unknown;
+  constructor(cause: unknown) {
+    super("network unreachable");
+    this.cause = cause;
   }
 }
 
@@ -62,13 +81,31 @@ async function request<T>(
     if (!token) throw new ApiError(401, null, "not authenticated");
     headers.Authorization = `Bearer ${token}`;
   }
-  const res = await fetch(`${API}${path}`, { ...init, headers });
+
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, { ...init, headers });
+  } catch (e) {
+    // fetch only rejects when the request never completed — never for a 4xx/5xx.
+    throw new NetworkError(e);
+  }
+
   if (res.status === 401 && auth) {
     logout();
     throw new ApiError(401, null, "session expired");
   }
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+
+  // A body we cannot parse is a broken response, not a network failure: keep the
+  // status so the caller still reports "server error 502" rather than guessing.
+  let data: unknown = null;
+  try {
+    const text = await res.text();
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    if (res.ok) throw new ApiError(res.status, null, `unparsable ${res.status}`);
+    data = null;
+  }
+
   if (!res.ok) {
     const detail = (data as { detail?: unknown } | null)?.detail ?? data;
     throw new ApiError(res.status, detail, `${res.status}`);

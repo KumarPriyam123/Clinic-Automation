@@ -147,7 +147,10 @@ export function useQueue(): QueueController {
       adopt(data, true);
     } catch (e) {
       if (e instanceof api.ApiError && e.status === 401) return;
-      setOffline(true); // network down → keep showing cached, show reconnect bar
+      // Either the request never landed (NetworkError) or the server refused it
+      // (5xx). Both mean the same thing for the queue on screen: it is no longer
+      // live. `offline` is that fact, not a claim about the radio.
+      setOffline(true);
     } finally {
       setLoading(false);
     }
@@ -179,13 +182,18 @@ export function useQueue(): QueueController {
           undoTimer.current = setTimeout(() => setUndoVisible(false), 5000);
         }
       } catch (e) {
-        if (e instanceof api.ApiError) {
+        if (e instanceof api.NetworkError) {
+          // Request never left the browser — the queue is not live any more.
+          setOffline(true);
+        } else if (e instanceof api.ApiError) {
           if (e.status === 401) return;
           const d = e.detail as { reason?: string } | null;
           const key = d?.reason ? REASON_STRING[d.reason] : undefined;
           setError(key ?? "genericError");
         } else {
-          setOffline(true);
+          // A bug in our own code, not a transport failure. Say something true
+          // and generic rather than blaming the network.
+          setError("genericError");
         }
       } finally {
         mutating.current = false;

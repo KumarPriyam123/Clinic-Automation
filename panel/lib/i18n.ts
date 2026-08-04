@@ -31,7 +31,13 @@ export const strings = {
   pin: { hi: "6 अंकों का PIN", en: "6-digit PIN" },
   enter: { hi: "अंदर जाएँ", en: "Enter" },
 
+  // Login failure copy is classified by HTTP status — see `app/lib/api.ts`.
+  // `wrongPin` may ONLY be shown on a 401. It previously appeared on every
+  // failure, including a CORS block, and sent a pilot clinic hunting for a
+  // credentials problem that did not exist.
   wrongPin: { hi: "गलत कोड या PIN", en: "Wrong code or PIN" },
+  serverError: { hi: "सर्वर में गड़बड़ी", en: "Server error" },
+  cannotReachServer: { hi: "सर्वर से संपर्क नहीं हुआ", en: "Cannot reach server" },
 
   // --- day / session ------------------------------------------------------ //
   today: { hi: "आज", en: "Today" },
