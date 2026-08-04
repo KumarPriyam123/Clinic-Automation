@@ -134,6 +134,14 @@ State machine in `convo/flow.py` keyed on `conversations`: `idle → choosing_se
 
 Audience: a 45-year-old receptionist on a cheap Android, one thumb, interrupted constantly. One screen does 90% of the job. Touch targets ≥ 56px; NEXT is a fixed-bottom 72px full-width button. Every mutating action shows a **5s UNDO** snackbar (backend `POST /undo` replays the inverse of the last action). Hindi-first labels, English fallback. Walk-in add = 2 taps. Calm clinical look: soft near-white background, one deep teal primary, amber/green/gray status chips, Noto Sans (Devanagari). Poll every 4s, optimistic updates, subtle sound on new booking/arrival. Installable PWA; offline = cached read-only queue + "reconnecting" bar.
 
+**Panel copy lives only in `panel/lib/i18n.ts`**, every entry carrying both `hi` and `en` — the same rule as `wa/templates.py`, extended to staff-facing strings. No user-visible string is hardcoded in a component. Locale is explicit: it defaults to `clinic.language`, a manual override in the `⋯` menu persists to `localStorage` and wins, and `<html lang>` tracks it. **Browser auto-translate is disabled** (`translate="no"`, `class="notranslate"`, `<meta name="google" content="notranslate">`) because machine translation rewrote state labels into imperatives next to destructive controls. Layout is verified at **360px width in both locales** — English strings run wider than Devanagari, so anything sized to fit Hindi must be re-checked in English.
+
+**Error messages are classified by HTTP status, never by a catch-all `catch`.** A credentials error ("wrong code or PIN") may be shown **only on a 401**. A 4xx/5xx is a server error and shows its status; a `fetch` rejection (network, DNS, CORS) is "cannot reach server". These are different facts and the person reading the screen cannot tell them apart unless the code does. The panel also never renders the API's own bilingual `message` prose — it maps the machine-readable `reason` to its own dictionary key so the screen stays in one language.
+
+**No relative countdown on a session that is not today.** ETAs and grace timers show absolute clock times on a future-dated session; a 10-hour countdown beside a 9:00 am target reads as a bug.
+
+**Controls do not appear and disappear with the data.** The आज/कल day tabs render unconditionally — zero bookings and no-session-that-day each get their own empty state rather than a vanished control.
+
 ## Conventions & testing
 
 - Python 3.11, full type hints, pydantic v2, black + ruff, raw SQL via asyncpg (no ORM).
@@ -147,7 +155,9 @@ Audience: a 45-year-old receptionist on a cheap Android, one thumb, interrupted 
 
 ## Env vars
 
-`DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY, WA_TOKEN, WA_PHONE_NUMBER_ID, WA_VERIFY_TOKEN, WA_APP_SECRET, LLM_PROVIDER, LLM_API_KEY, JWT_SECRET, ENV`
+`DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY, WA_TOKEN, WA_PHONE_NUMBER_ID, WA_VERIFY_TOKEN, WA_APP_SECRET, LLM_PROVIDER, LLM_API_KEY, JWT_SECRET, PANEL_ORIGINS, ENV`
+
+`PANEL_ORIGINS` is the CORS allow-list for the panel. A new panel origin that is missing from it fails **in the browser, before the request is sent** — which looks like nothing at all unless the panel classifies its errors (see Panel principles).
 
 ## v1 scope guard — do NOT build (even if it seems helpful)
 
