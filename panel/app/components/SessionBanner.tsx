@@ -83,7 +83,7 @@ export function SessionBanner({
               <button
                 key={s.id}
                 onClick={() => onSwitch(s.id)}
-                className={`shrink-0 rounded-full px-4 py-1.5 text-sm font-semibold transition ${
+                className={`flex min-h-touch shrink-0 items-center rounded-full px-4 text-sm font-semibold transition ${
                   active ? "bg-primary text-white" : "border border-line bg-canvas text-muted"
                 }`}
               >

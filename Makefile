@@ -33,6 +33,7 @@ test-sw:
 	node panel/sw.test.mjs
 	node panel/session-target.test.mjs
 	node panel/poll-policy.test.mjs
+	cd panel && node touch-targets.test.mjs
 
 lint:
 	cd backend && ruff check . && black --check .

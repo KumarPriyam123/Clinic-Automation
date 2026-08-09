@@ -90,7 +90,7 @@ export default function SettingsPage() {
         <div className="mb-4 flex items-center gap-3">
           <Link
             href="/"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-xl active:bg-canvas"
+            className="flex h-touch w-touch shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-xl active:bg-canvas"
           >
             ‹
           </Link>
@@ -131,7 +131,7 @@ export default function SettingsPage() {
                 <button
                   key={l}
                   onClick={() => patchClinic({ language: l })}
-                  className={`h-11 min-w-[4rem] rounded-xl px-3 text-base font-semibold ${
+                  className={`h-touch min-w-[4rem] rounded-xl px-3 text-base font-semibold ${
                     data.clinic.language === l
                       ? "bg-primary text-white"
                       : "border border-line bg-surface text-muted"
@@ -159,7 +159,7 @@ export default function SettingsPage() {
                   </span>
                   <button
                     onClick={() => setTt(tt.filter((_, idx) => idx !== i))}
-                    className="shrink-0 text-sm font-semibold text-danger"
+                    className="-mr-2 flex min-h-touch shrink-0 items-center px-2 text-sm font-semibold text-danger"
                   >
                     {t("remove")}
                   </button>
@@ -183,7 +183,7 @@ export default function SettingsPage() {
                       onChange={(e) =>
                         patchRow(i, { token_cap: Number(e.target.value.replace(/\D/g, "")) || 0 })
                       }
-                      className="h-11 w-full rounded-lg border border-line bg-surface px-2 text-center text-base tabular-nums outline-none focus:border-primary"
+                      className="h-touch w-full rounded-lg border border-line bg-surface px-2 text-center text-base tabular-nums outline-none focus:border-primary"
                     />
                   </label>
                 </div>
@@ -268,7 +268,7 @@ function Field({
         value={value}
         inputMode={inputMode}
         onChange={(e) => onChange(e.target.value)}
-        className="h-12 w-full rounded-xl border border-line bg-canvas px-3 text-base text-ink outline-none focus:border-primary"
+        className="h-touch w-full rounded-xl border border-line bg-canvas px-3 text-base text-ink outline-none focus:border-primary"
       />
     </label>
   );
@@ -290,7 +290,7 @@ function TimeInput({
         type="time"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-11 w-full min-w-0 rounded-lg border border-line bg-surface px-1 text-center text-base outline-none focus:border-primary"
+        className="h-touch w-full min-w-0 rounded-lg border border-line bg-surface px-1 text-center text-base outline-none focus:border-primary"
       />
     </label>
   );
@@ -319,17 +319,27 @@ function Row({
 }
 
 function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  // The tap target is the full 56px button; the switch drawn inside it stays
+  // 32px so the control still reads as a switch rather than a slab. Sizing the
+  // visual element itself to 56px was the wrong fix — a thumb needs the area,
+  // not the pixels.
   return (
     <button
       onClick={onToggle}
-      className={`relative h-8 w-14 shrink-0 rounded-full transition ${on ? "bg-primary" : "bg-neutral-bg"}`}
+      className="flex h-touch w-touch shrink-0 items-center justify-end rounded-xl active:bg-canvas"
       aria-pressed={on}
     >
       <span
-        className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-all ${
-          on ? "left-7" : "left-1"
+        className={`relative block h-8 w-14 rounded-full transition ${
+          on ? "bg-primary" : "bg-neutral-bg"
         }`}
-      />
+      >
+        <span
+          className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-all ${
+            on ? "left-7" : "left-1"
+          }`}
+        />
+      </span>
     </button>
   );
 }

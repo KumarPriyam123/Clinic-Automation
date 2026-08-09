@@ -14,7 +14,7 @@ export function UndoSnackbar({ visible, onUndo }: { visible: boolean; onUndo: ()
         <span className="min-w-0 flex-1 truncate text-sm font-medium">✓ {t("saved")}</span>
         <button
           onClick={onUndo}
-          className="min-h-[2.75rem] shrink-0 rounded-xl bg-white/15 px-4 text-base font-bold text-white active:bg-white/25"
+          className="min-h-touch shrink-0 rounded-xl bg-white/15 px-4 text-base font-bold text-white active:bg-white/25"
         >
           ↩ {t("undo")}
         </button>
@@ -30,7 +30,7 @@ export function ErrorToast({ message, onClose }: { message: string | null; onClo
     <div className="pointer-events-none fixed inset-x-0 top-3 z-50 flex justify-center px-4">
       <button
         onClick={onClose}
-        className="pointer-events-auto max-w-full animate-pop rounded-2xl bg-danger px-4 py-2.5 text-sm font-semibold text-white shadow-sheet"
+        className="pointer-events-auto flex min-h-touch max-w-full animate-pop items-center rounded-2xl bg-danger px-4 py-2.5 text-sm font-semibold text-white shadow-sheet"
       >
         {message}
       </button>

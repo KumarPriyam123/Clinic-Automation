@@ -126,7 +126,7 @@ export default function LiveQueue() {
           <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={() => setControlsOpen(true)}
-              className="flex h-11 max-w-[9rem] items-center gap-1.5 rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-ink active:bg-canvas"
+              className="flex h-touch max-w-[9rem] items-center gap-1.5 rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-ink active:bg-canvas"
               aria-label={t("controls")}
             >
               <span className="shrink-0">⚙</span>
@@ -134,7 +134,7 @@ export default function LiveQueue() {
             </button>
             <button
               onClick={() => setMenuOpen(true)}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-lg active:bg-canvas"
+              className="flex h-touch w-touch shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-lg active:bg-canvas"
               aria-label={t("more")}
             >
               ⋯
