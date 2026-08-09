@@ -26,9 +26,12 @@ db-diff:
 test: test-sw
 	@sh scripts/run_tests.sh
 
-# Service worker request-classification test (no framework, plain node).
+# Panel unit tests (no framework, plain node) + the mirror-drift guard that
+# keeps their inlined copies honest.
 test-sw:
+	@sh scripts/check_mirrors.sh
 	node panel/sw.test.mjs
+	node panel/session-target.test.mjs
 
 lint:
 	cd backend && ruff check . && black --check .

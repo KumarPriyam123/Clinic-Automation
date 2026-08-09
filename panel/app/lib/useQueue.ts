@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import { chime } from "./sound";
+import { nextSelectedId, shouldAdopt } from "./session-target";
 import type { QueueSnapshot } from "./types";
 import type { StringKey } from "@/lib/i18n";
 
@@ -68,6 +69,13 @@ function arrivalSignature(snap: QueueSnapshot | null): string {
 
 export interface QueueController {
   snap: QueueSnapshot | null;
+  /**
+   * The SELECTED session — user intent, and the only id a mutation may target.
+   *
+   * Never derive a mutation's session from `snap.session.id`: the snapshot is
+   * whatever response landed last, which during a switch can be a session the
+   * user is no longer looking at. See lib/session-target.ts.
+   */
   sessionId: string | null;
   setSessionId: (id: string) => void;
   /** The day being viewed, ISO "YYYY-MM-DD" in IST. */
@@ -105,7 +113,22 @@ export function useQueue(): QueueController {
   const mutating = useRef(false);
   const snapRef = useRef<QueueSnapshot | null>(loadCache());
 
+  // Mirror of `sessionId` readable synchronously inside callbacks. The state
+  // value closed over by an in-flight request is the one from when it started,
+  // which is exactly the value that must NOT decide whether it is still wanted.
+  const selectedRef = useRef<string | null>(loadCache()?.session?.id ?? null);
+
+  const select = useCallback((id: string | null) => {
+    selectedRef.current = id;
+    setSessionId(id);
+  }, []);
+
   const adopt = useCallback((next: QueueSnapshot, fromPoll: boolean) => {
+    // Reject anything that is not for the currently selected session. Arrival
+    // order must never decide which session the panel is showing or acting on.
+    const incoming = next.session?.id ?? null;
+    if (!shouldAdopt(selectedRef.current, incoming)) return;
+
     // detect a newly-landed patient only during background polling
     const sig = arrivalSignature(next);
     if (fromPoll && prevSig.current && sig !== prevSig.current) {
@@ -128,7 +151,10 @@ export function useQueue(): QueueController {
     };
     snapRef.current = merged;
     setSnap(merged);
-    if (merged.session) setSessionId(merged.session.id);
+    // Resolve-only: this may settle an unresolved selection (the day route
+    // picking a session for us), never move a settled one.
+    const resolved = nextSelectedId(selectedRef.current, merged.session?.id ?? null);
+    if (resolved !== selectedRef.current) select(resolved);
     if (typeof window !== "undefined") {
       window.localStorage.setItem(CACHE_KEY, JSON.stringify(merged));
     }
@@ -156,11 +182,14 @@ export function useQueue(): QueueController {
     }
   }, [sessionId, day, adopt]);
 
-  /** Switch the day in view. Clearing sessionId lets the day route pick. */
-  const setDay = useCallback((next: string) => {
-    setDayState(next);
-    setSessionId(null);
-  }, []);
+  /** Switch the day in view. Clearing the selection lets the day route pick. */
+  const setDay = useCallback(
+    (next: string) => {
+      setDayState(next);
+      select(null);
+    },
+    [select],
+  );
 
   useEffect(() => {
     poll();
@@ -211,7 +240,7 @@ export function useQueue(): QueueController {
   return {
     snap,
     sessionId,
-    setSessionId,
+    setSessionId: select,
     day,
     setDay,
     offline,

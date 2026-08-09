@@ -41,7 +41,11 @@ export default function LiveQueue() {
 
   const clinic = getClinic();
   const session = q.snap?.session ?? null;
-  const sid = session?.id ?? q.sessionId ?? null;
+  // The mutation target is the SELECTED session, never the adopted snapshot's.
+  // `snap.session` is whatever response landed last; deriving `sid` from it is
+  // how NEXT could serve a patient from a session the user had switched away
+  // from. See lib/session-target.ts.
+  const sid = q.sessionId;
   const isOpen = session?.status === "open";
   const today = todayIST();
   const viewingToday = q.day === today;
