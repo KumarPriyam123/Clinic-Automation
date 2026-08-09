@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 from app import db
 from app.api import panel
 from app.api.schemas import QueueSnapshot
+from app.config import settings
 from app.main import create_app
 from tests.pg_util import DSN, fresh_pool
 
@@ -69,6 +70,9 @@ def test_every_mutating_route_smoke():
         pool = await _prepare_pool()
         try:
             await _make_today_session(pool)
+            # /metrics is bearer-guarded; configure a token so the smoke test
+            # can exercise both the rejected and the accepted path.
+            settings.METRICS_TOKEN = "test-metrics-token"
             transport = ASGITransport(app=create_app())
             async with AsyncClient(transport=transport, base_url="http://t") as c:
                 # --- auth ---
@@ -82,8 +86,11 @@ def test_every_mutating_route_smoke():
                 token = login.json()["token"]
                 h = {"Authorization": f"Bearer {token}"}
 
-                # --- ops: /metrics (no auth), shape + live pool ---
-                m = await c.get("/metrics")
+                # --- ops: /metrics requires a bearer token (P8.7) ---
+                # Previously asserted "no auth" — /metrics is now guarded
+                # because it does real DB work and returns cross-tenant counts.
+                assert (await c.get("/metrics")).status_code == 401
+                m = await c.get("/metrics", headers={"Authorization": "Bearer test-metrics-token"})
                 assert m.status_code == 200, m.text
                 mj = m.json()
                 assert {

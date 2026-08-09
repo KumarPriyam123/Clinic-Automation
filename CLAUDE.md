@@ -215,6 +215,11 @@ Audience: a 45-year-old receptionist on a cheap Android, one thumb, interrupted 
   ```
 - **A missing origin fails in the browser, before the request is sent.** There is no server log, no status code, nothing — which reads as "the PIN stopped working" unless the panel classifies its errors (see Panel principles). After moving the panel to a new domain, verify with a preflight rather than assuming: `curl -i -X OPTIONS <api>/panel/login -H 'Origin: <panel origin>' -H 'Access-Control-Request-Method: POST'`.
 
+## Operational endpoints
+
+- **`/healthz`** — unauthenticated, returns `{"ok": true}` and nothing else. Uptime monitors point here. Keep it free of counts and identifiers.
+- **`/metrics`** — **requires `Authorization: Bearer $METRICS_TOKEN`.** Unset token ⇒ the route 404s, so missing config cannot silently downgrade to "public". It is guarded for two reasons: `bookings_today` is a cross-tenant patient count, and more importantly each request takes a pool connection and runs two `count(*)` scans — an unauthenticated endpoint doing real database work is a cheap way to starve the pool the live queue depends on.
+
 ## v1 scope guard — do NOT build (even if it seems helpful)
 
 Billing · pharmacy/inventory · prescriptions or any EMR/medical data storage · payments/token fees · strikes *enforcement* · multi-doctor UI (schema stays ready) · voice calls / missed-call telephony · Redis · Realtime/websockets · native apps · TV waiting-room view · analytics dashboard pages. These live in the v1.1+ backlog; add only when explicitly asked.

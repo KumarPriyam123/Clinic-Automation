@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "dev-secret-change-me"
     ENV: str = "dev"
 
+    # Bearer token guarding /metrics. Unset => the endpoint 404s and is simply
+    # not exposed; it fails CLOSED rather than serving cross-tenant counts to
+    # anyone who finds the URL. /healthz stays open for uptime monitors.
+    METRICS_TOKEN: str = ""
+
     # Panel (Next.js) origins allowed to call the API (CORS).
     # MUST be a JSON array in env, not a comma-separated string — this is a
     # complex type, so pydantic-settings json-decodes it and a bare
