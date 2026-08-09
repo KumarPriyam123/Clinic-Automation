@@ -142,7 +142,7 @@ export default function SettingsPage() {
               ))}
             </div>
           </Row>
-          <Row label={t("gapOffers")}>
+          <Row label={t("gapOffers")} hint={t("gapOffersHint")}>
             <Toggle on={gapOffers} onToggle={() => patchSetting("gap_offers", !gapOffers)} />
           </Row>
         </Card>
@@ -296,10 +296,23 @@ function TimeInput({
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  /** One line saying what the control actually does, for settings whose scope
+   * is not guessable from the label alone. */
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="min-w-0 text-base font-medium text-ink">{label}</span>
+      <span className="min-w-0">
+        <span className="block text-base font-medium text-ink">{label}</span>
+        {hint && <span className="mt-0.5 block text-xs leading-snug text-muted">{hint}</span>}
+      </span>
       {children}
     </div>
   );

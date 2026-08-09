@@ -571,9 +571,6 @@ async def _gap_check(
     which is not a problem a patient can solve.
     """
     policy = await repo.get_gap_policy(session.clinic_id)
-    if not policy.offers_enabled:
-        return
-
     entries = await repo.list_entries(session.id)
     waiting = _ordered_waiting(entries)
     if not waiting:
@@ -594,6 +591,16 @@ async def _gap_check(
         await repo.add_event(session.clinic_id, session.id, pull.id, "gap_taken")
         result.touched(pull)
         await _recompute_and_shift(repo, session, entries, now, result)
+        return
+
+    # `gap_offers` governs the OFFER ONLY, never the auto-pull above.
+    #
+    # A doctor turns this off because a patient found the unsolicited message
+    # intrusive. The auto-pull sends no message at all — it calls someone
+    # already sitting in the waiting room a few minutes earlier. Coupling the
+    # two would let a switch about patient messaging silently degrade queue
+    # throughput, with nothing on screen connecting cause to effect.
+    if not policy.offers_enabled:
         return
 
     # GUARD (3b): only bother REMOTE patients once the doctor is actually

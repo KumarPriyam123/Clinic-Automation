@@ -118,7 +118,7 @@ After any cancel/expiry, if `doctor_free_at + 10 min < next.priority_time`, in t
 
 Why: an evening session opened 17:00, two patients booked ~19:00, the first cancelled at 17:30, and the second was offered **17:30** — 90 minutes before the time they chose. `17:30` was simply `now`. That hole was not created by the cancellation; it was the empty stretch before anyone had booked, and the cancel merely triggered re-evaluation of it. The rule exists for a doctor finishing early *between patients*, which is not a problem a patient can solve by leaving home earlier.
 
-`gap_offers: false` in `clinics.settings` disables the whole pull-forward feature, both the auto-pull and the offer.
+**`gap_offers: false` disables step 2 only.** The auto-pull in step 1 keeps running: the setting is about unsolicited patient messaging, and pulling forward someone already in the waiting room sends no message at all. Coupling them would let a messaging preference silently degrade queue throughput, with nothing on screen connecting cause to effect.
 
 ## Anti-abuse (v1)
 

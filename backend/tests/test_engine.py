@@ -547,7 +547,15 @@ def test_gap_arrived_autopull_ignores_the_horizon():
     assert far.priority_time == dt(17, 30)  # pulled forward regardless
 
 
-def test_gap_offers_disabled_emits_nothing_on_any_path():
+def test_gap_offers_disabled_suppresses_the_offer_only():
+    """`gap_offers` governs the remote OFFER, not the ARRIVED auto-pull.
+
+    P8.6 implemented this literally as "nothing emitted on any path" and made
+    the switch no-op the whole gap check. That was wrong: the setting is about
+    unsolicited patient messaging, while the auto-pull sends nothing at all and
+    merely calls someone already in the waiting room a few minutes earlier.
+    Coupling them let a messaging preference silently degrade throughput.
+    """
     repo = MemRepo()
     repo.gap_policy = GapPolicy(offers_enabled=False)
 
@@ -563,7 +571,7 @@ def test_gap_offers_disabled_emits_nothing_on_any_path():
     assert _gap_offers(res) == []
     assert later.gap_offered_at is None
 
-    # auto-pull path: an ARRIVED patient is not pulled forward either
+    # auto-pull path: an ARRIVED patient IS still pulled forward
     repo2 = MemRepo()
     repo2.gap_policy = GapPolicy(offers_enabled=False)
     s2 = open_session(repo2, dt(17), avg=420, free=dt(17), end=dt(21))
@@ -571,8 +579,30 @@ def test_gap_offers_disabled_emits_nothing_on_any_path():
     x = do_book(repo2, s2, q1, dt(17), req=dt(17, 30)).entry
     y = do_book(repo2, s2, q2, dt(17), req=dt(20)).entry
     run(engine.mark_arrived(repo2, dt(17, 30), y.id))
-    run(engine.cancel(repo2, dt(17, 30), x.id))
-    assert y.priority_time == dt(20)  # untouched
+    res2 = run(engine.cancel(repo2, dt(17, 30), x.id))
+    assert y.priority_time == dt(17, 30), "auto-pull was disabled by a messaging toggle"
+    assert _gap_offers(res2) == []  # and still no offer, on any path
+
+
+def test_gap_offers_disabled_emits_no_offer_on_any_path():
+    """The half of the P8.6 assertion that survives: no gap_offer is ever sent."""
+    repo = MemRepo()
+    repo.gap_policy = GapPolicy(offers_enabled=False)
+    s = open_session(repo, dt(17), avg=420, free=dt(17), end=dt(21))
+    p1, p2, p3 = (patient(repo, s.clinic_id, i) for i in (1, 2, 3))
+    seen = do_book(repo, s, p1, dt(17), req=dt(18)).entry
+    a = do_book(repo, s, p2, dt(17), req=dt(19)).entry
+    b = do_book(repo, s, p3, dt(17), req=dt(19, 10)).entry
+
+    run(engine.mark_arrived(repo, dt(18), seen.id))
+    run(engine.next_patient(repo, dt(18), s.id))
+    res_next = run(engine.next_patient(repo, dt(18, 40), s.id))
+    res_gap = run(engine.gap_check(repo, dt(18, 40), s.id))
+    res_cancel = run(engine.cancel(repo, dt(18, 41), a.id))
+
+    for res in (res_next, res_gap, res_cancel):
+        assert _gap_offers(res) == []
+    assert a.gap_offered_at is None and b.gap_offered_at is None
 
 
 def test_gap_horizon_is_per_clinic_configurable():

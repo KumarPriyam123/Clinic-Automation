@@ -185,6 +185,13 @@ export const strings = {
   fieldFee: { hi: "फीस ₹", en: "Fee ₹" },
   clinicLanguage: { hi: "मरीज़ों की भाषा", en: "Patient language" },
   gapOffers: { hi: "गैप ऑफर", en: "Gap offers" },
+  // Says what the switch actually controls. It governs the outgoing message
+  // only — a patient already waiting at the clinic is still called earlier
+  // when a slot frees up, whatever this is set to.
+  gapOffersHint: {
+    hi: "जल्दी नंबर मिलने पर मरीज़ों को संदेश भेजें",
+    en: "Message patients to offer them an earlier slot",
+  },
   remove: { hi: "हटाएँ", en: "Remove" },
   startTime: { hi: "शुरू", en: "Start" },
   endTime: { hi: "अंत", en: "End" },
