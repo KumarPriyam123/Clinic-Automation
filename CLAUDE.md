@@ -105,7 +105,11 @@ Bare `pytest` reports **130 passed, 16 skipped** and prints a green bar with exi
 
 ## Gap pull-forward (doctor never idles)
 
-After any cancel/expiry, if `doctor_free_at + 10 min < next.priority_time`, in this order:
+**Where this actually fires today: the cancel path, and nowhere else.** `_gap_check` has exactly one production call site, in `engine.cancel()`. It does **not** run on expiry, and it does **not** run when the doctor finishes early via NEXT — even though the "doctor finished early" case is the one the rule was written for. The public `engine.gap_check()` entry point exists and is exported, but nothing in `app/jobs/` or `app/api/` calls it.
+
+This is deliberate for v1, not an oversight to be tidied up. Adding those trigger points increases how often real patients receive an unprompted WhatsApp message, and no real clinic session has been observed yet. **Do not wire them without deciding that explicitly** — see the v1.1 backlog. The rest of this section describes the rule as designed; treat everything below as "when a gap check runs", not "whenever a gap appears".
+
+When a gap check runs, if `doctor_free_at + 10 min < next.priority_time`, in this order:
 1. Auto-pull the earliest **ARRIVED** patient regardless of their target time (they only benefit). **Not subject to the horizon below** — someone already in the waiting room can only gain from being called sooner.
 2. Else offer the slot to the next 2–3 remote patients in queue order — first YES sets their `priority_time = now`; offer expires in `gap_offer_expiry_min` (default 5); max one offer per patient per session.
 3. Else a walk-in (`priority_time = now`) naturally fills the hole.
@@ -214,6 +218,10 @@ Audience: a 45-year-old receptionist on a cheap Android, one thumb, interrupted 
 ## v1 scope guard — do NOT build (even if it seems helpful)
 
 Billing · pharmacy/inventory · prescriptions or any EMR/medical data storage · payments/token fees · strikes *enforcement* · multi-doctor UI (schema stays ready) · voice calls / missed-call telephony · Redis · Realtime/websockets · native apps · TV waiting-room view · analytics dashboard pages. These live in the v1.1+ backlog; add only when explicitly asked.
+
+### v1.1 backlog — decided against for v1, with reasons
+
+- **Additional gap-check trigger points (expiry, and NEXT when the doctor finishes early).** `_gap_check` currently runs only from `engine.cancel()`. Wiring the other two would make the feature behave as the rule above describes, but each new trigger increases how often real patients get an unprompted WhatsApp message offering an earlier slot. No real clinic session has been observed yet, so there is no evidence about how that lands with patients or how often it would fire. Revisit after the pilot has run live sessions — with the pull-forward horizon and the working-doctor gate already in place, the guards are ready for it.
 
 ## Working agreements for every session
 
