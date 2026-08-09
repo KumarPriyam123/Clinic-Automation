@@ -41,6 +41,53 @@ class Settings(BaseSettings):
                 len(self.WA_APP_SECRET),
             )
 
+    def is_production(self) -> bool:
+        """True only for values that unambiguously mean production.
+
+        Deliberately narrow. An unrecognised ENV must NOT be treated as
+        production, because the only caller of this raises at boot — a typo
+        like ENV=prodution would otherwise take the pilot backend dark.
+        """
+        return self.ENV.strip().lower() in {"prod", "production"}
+
+    def assert_panel_origins_configured(self) -> None:
+        """In production, refuse to boot on an unset PANEL_ORIGINS.
+
+        Falling back to the localhost defaults in production means the panel
+        fails CORS in the browser, before any request is sent — no server log,
+        no status code, nothing to debug against. Quietly substituting a
+        development value for missing production config is the same
+        silent-wrong-success this codebase keeps getting bitten by.
+
+        Scope is deliberately narrow: it fires only when ENV is definitively
+        production AND the variable is absent from the environment. It does not
+        second-guess a list that IS set — the live droplet legitimately carries
+        http://localhost:3000 alongside its real origins.
+        """
+        import logging
+        import os
+
+        log = logging.getLogger("clinicq.config")
+        if not self.is_production():
+            return
+        if "PANEL_ORIGINS" not in os.environ:
+            raise RuntimeError(
+                "PANEL_ORIGINS is not set and ENV is production. Refusing to start "
+                "on the localhost CORS defaults: the panel would fail to log in "
+                "with no server-side symptom. Set it as a JSON array, e.g. "
+                'PANEL_ORIGINS=["https://app.clinicq.kpriyam.me"]'
+            )
+        if not any(
+            o.strip() and "localhost" not in o and "127.0.0.1" not in o for o in self.PANEL_ORIGINS
+        ):
+            # Suspicious, not fatal — a deliberate localhost-only production
+            # box is odd but legal, and this must not be able to take prod down.
+            log.error(
+                "PANEL_ORIGINS resolves to localhost-only in production: %s — "
+                "the deployed panel will fail CORS",
+                self.PANEL_ORIGINS,
+            )
+
     # LLM (provider-agnostic: gemini-flash | claude-haiku)
     LLM_PROVIDER: str = "gemini-flash"
     LLM_API_KEY: str = ""

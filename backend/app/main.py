@@ -44,6 +44,15 @@ async def _handle_inbound(inbound: InboundMessage) -> None:
 async def lifespan(app: FastAPI):
     obs.configure_logging()
     settings.assert_wa_secret_valid()
+    settings.assert_panel_origins_configured()
+    # Log the effective CORS allow-list next to the scheduler line below. A
+    # missing origin fails inside the browser with no server-side trace, so
+    # having it in the boot log turns a curl matrix into a five-second check.
+    log.info(
+        "CORS PANEL_ORIGINS=%s (ENV=%s)",
+        settings.PANEL_ORIGINS,
+        settings.ENV,
+    )
     await db.init_pool()
     set_message_handler(_handle_inbound)
 
