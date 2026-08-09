@@ -32,6 +32,7 @@ test-sw:
 	@sh scripts/check_mirrors.sh
 	node panel/sw.test.mjs
 	node panel/session-target.test.mjs
+	node panel/poll-policy.test.mjs
 
 lint:
 	cd backend && ruff check . && black --check .

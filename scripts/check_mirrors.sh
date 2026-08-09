@@ -37,8 +37,10 @@ check() {
     # The TS source carries type annotations the .mjs mirror cannot, and
     # prettier wraps signatures differently in each file. Strip both so the
     # comparison is about logic, not syntax. Applied identically to both sides.
+    # Order matters: strip the union forms before the bare ones.
     norm() {
-      sed -e 's/: string | null//g' -e 's/: boolean//g' -e 's/: null//g' \
+      sed -e 's/: string | null//g' -e 's/: number | null//g' \
+          -e 's/: string//g' -e 's/: number//g' -e 's/: boolean//g' -e 's/: null//g' \
           -e 's/export //g' \
           -e 's/( /(/g' -e 's/ )/)/g' -e 's/,)/)/g'
     }
@@ -61,6 +63,9 @@ check panel/public/sw.js panel/sw.test.mjs \
 
 check panel/app/lib/session-target.ts panel/session-target.test.mjs \
   shouldAdopt nextSelectedId
+
+check panel/app/lib/poll-policy.ts panel/poll-policy.test.mjs \
+  pollsOnInterval shouldIssueRequest
 
 if [ "$fail" -ne 0 ]; then
   echo "" >&2

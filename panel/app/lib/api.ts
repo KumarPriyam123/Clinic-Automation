@@ -71,6 +71,22 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * We cancelled this request ourselves (the poller moved on, the component
+ * unmounted). Distinct from NetworkError on purpose: an abort says nothing
+ * about connectivity, and treating one as a network failure would light up the
+ * offline banner every time the receptionist switches tabs.
+ */
+export class AbortedError extends Error {
+  constructor() {
+    super("request aborted");
+  }
+}
+
+function isAbort(e: unknown): boolean {
+  return e instanceof DOMException ? e.name === "AbortError" : false;
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -90,6 +106,8 @@ async function request<T>(
   try {
     res = await fetch(`${API}${path}`, { ...init, headers });
   } catch (e) {
+    // Our own cancellation is not a connectivity fact — classify it separately.
+    if (isAbort(e) || init.signal?.aborted) throw new AbortedError();
     // fetch only rejects when the request never completed — never for a 4xx/5xx.
     throw new NetworkError(e);
   }
@@ -129,12 +147,16 @@ export async function login(slug: string, pin: string): Promise<ClinicInfo> {
 }
 
 // --- queue --------------------------------------------------------------- //
-export const fetchToday = () => request<QueueSnapshot>("/session/today");
+// All three take an optional AbortSignal so the poller can cancel a request it
+// no longer wants. A response that arrives after the user moved on must not be
+// able to influence anything (see lib/session-target.ts).
+export const fetchToday = (signal?: AbortSignal) =>
+  request<QueueSnapshot>("/session/today", { signal });
 /** Any single day (ISO "YYYY-MM-DD"). Days other than today come back read_only. */
-export const fetchDay = (date: string) =>
-  request<QueueSnapshot>(`/session/day?date=${date}`);
-export const fetchQueue = (sessionId: string) =>
-  request<QueueSnapshot>(`/queue?session_id=${sessionId}`);
+export const fetchDay = (date: string, signal?: AbortSignal) =>
+  request<QueueSnapshot>(`/session/day?date=${date}`, { signal });
+export const fetchQueue = (sessionId: string, signal?: AbortSignal) =>
+  request<QueueSnapshot>(`/queue?session_id=${sessionId}`, { signal });
 
 const body = (o: unknown) => JSON.stringify(o);
 

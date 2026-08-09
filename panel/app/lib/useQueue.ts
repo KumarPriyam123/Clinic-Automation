@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import { chime } from "./sound";
+import { POLL_MS, pollsOnInterval, shouldIssueRequest } from "./poll-policy";
 import { nextSelectedId, shouldAdopt } from "./session-target";
 import type { QueueSnapshot } from "./types";
 import type { StringKey } from "@/lib/i18n";
@@ -24,7 +25,6 @@ const REASON_STRING: Record<string, StringKey> = {
 };
 
 const CACHE_KEY = "clinicq.lastQueue";
-const POLL_MS = 4000;
 export const STALE_MS = 10 * 60 * 1000; // 10 min — beyond this show error, not data
 
 /** Today's date in IST as "YYYY-MM-DD" — matches the session.date field. */
@@ -158,28 +158,88 @@ export function useQueue(): QueueController {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(CACHE_KEY, JSON.stringify(merged));
     }
-  }, []);
+  }, [select]);
 
-  const poll = useCallback(async () => {
-    if (mutating.current) return;
-    try {
-      const data = sessionId
-        ? await api.fetchQueue(sessionId)
-        : day === todayIST()
-          ? await api.fetchToday()
-          : await api.fetchDay(day);
-      setOffline(false);
-      setLastLiveAt(Date.now());
-      adopt(data, true);
-    } catch (e) {
-      if (e instanceof api.ApiError && e.status === 401) return;
-      // Either the request never landed (NetworkError) or the server refused it
-      // (5xx). Both mean the same thing for the queue on screen: it is no longer
-      // live. `offline` is that fact, not a claim about the radio.
-      setOffline(true);
-    } finally {
-      setLoading(false);
-    }
+  /**
+   * The one and only poller.
+   *
+   * Deps are the two PRIMITIVES that define what to fetch — never the session
+   * object or the snapshot. An object dependency would tear this effect down
+   * and rebuild it on every poll cycle, which is a runaway of its own.
+   *
+   * Behaviour that is deliberate and load-bearing:
+   *  - only today's session polls on an interval. A future day cannot change
+   *    second to second, so it is fetched once when opened.
+   *  - hidden documents do not poll at all. A panel left open overnight must
+   *    not spend a clinic's mobile data until morning; on return we refetch
+   *    once immediately and then resume the normal cadence.
+   *  - every request is abortable and every response is checked against the
+   *    selection before it is allowed to touch state.
+   */
+  useEffect(() => {
+    const onInterval = pollsOnInterval(day, todayIST());
+    let cancelled = false;
+    let controller = new AbortController();
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const tick = async () => {
+      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+      if (!shouldIssueRequest(cancelled, mutating.current, hidden)) return;
+
+      controller = new AbortController();
+      const signal = controller.signal;
+      try {
+        const data = sessionId
+          ? await api.fetchQueue(sessionId, signal)
+          : onInterval
+            ? await api.fetchToday(signal)
+            : await api.fetchDay(day, signal);
+        if (cancelled) return;
+        setOffline(false);
+        setLastLiveAt(Date.now());
+        adopt(data, true); // adopt() itself rejects anything not for the selection
+      } catch (e) {
+        // We cancelled it. Says nothing about the network, so change nothing.
+        if (e instanceof api.AbortedError || cancelled) return;
+        if (e instanceof api.ApiError && e.status === 401) return;
+        // Either the request never landed (NetworkError) or the server refused
+        // it (5xx). Both mean the same for the queue on screen: not live.
+        setOffline(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    const startInterval = () => {
+      if (timer === null && onInterval) timer = setInterval(tick, POLL_MS);
+    };
+    const stopInterval = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        stopInterval();
+        controller.abort();
+      } else {
+        tick(); // one immediate refetch, then back to the normal cadence
+        startInterval();
+      }
+    };
+
+    tick();
+    startInterval();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      stopInterval();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [sessionId, day, adopt]);
 
   /** Switch the day in view. Clearing the selection lets the day route pick. */
@@ -190,12 +250,6 @@ export function useQueue(): QueueController {
     },
     [select],
   );
-
-  useEffect(() => {
-    poll();
-    const id = setInterval(poll, POLL_MS);
-    return () => clearInterval(id);
-  }, [poll]);
 
   const run = useCallback(
     async (fn: () => Promise<QueueSnapshot>) => {
@@ -211,7 +265,10 @@ export function useQueue(): QueueController {
           undoTimer.current = setTimeout(() => setUndoVisible(false), 5000);
         }
       } catch (e) {
-        if (e instanceof api.NetworkError) {
+        if (e instanceof api.AbortedError) {
+          // Mutations are never aborted by the poller, but stay explicit so an
+          // abort can never be misreported as a connectivity failure.
+        } else if (e instanceof api.NetworkError) {
           // Request never left the browser — the queue is not live any more.
           setOffline(true);
         } else if (e instanceof api.ApiError) {
