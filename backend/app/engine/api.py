@@ -36,7 +36,6 @@ from app.engine.results import (
 )
 from app.engine.state import (
     ACTIVE_STATUSES,
-    GAP_OFFER_TTL,
     GAP_THRESHOLD,
     RELEASED_STATUSES,
     WAITING_STATUSES,
@@ -463,6 +462,7 @@ async def sweep(repo: Repo, now: datetime) -> EngineResult:
     result = EngineResult()
     for session in await repo.open_sessions():
         entries = await repo.list_entries(session.id)
+        _gap_ttl = (await repo.get_gap_policy(session.clinic_id)).offer_ttl
         changed = False
         for e in entries:
             # grace expiry: skipped and never came back -> EXPIRED + strike
@@ -476,7 +476,7 @@ async def sweep(repo: Repo, now: datetime) -> EngineResult:
                 result.notify(NotificationType.expired_rebook, e.id)
                 changed = True
             # gap-offer expiry: unanswered offer lapses (max 1 per session)
-            elif e.gap_offered_at and now > e.gap_offered_at + GAP_OFFER_TTL:
+            elif e.gap_offered_at and now > e.gap_offered_at + _gap_ttl:
                 e.gap_offered_at = None
                 await repo.save_entry(e)
                 result.touched(e)
@@ -557,7 +557,23 @@ async def _gap_check(
     repo: Repo, now: datetime, session: SessionState, result: EngineResult
 ) -> None:
     """After a cancel/expiry: if the doctor would idle >10 min before the next
-    patient's target, pull an ARRIVED patient forward, else offer to remotes."""
+    patient's target, pull an ARRIVED patient forward, else offer to remotes.
+
+    Two guards keep this from firing on holes it cannot fix. Observed without
+    them: an evening session opened 17:00, two patients booked for ~19:00, the
+    first cancelled at 17:30, and the second was offered 17:30 — 90 minutes
+    before the time they chose. `17:30` was simply `now`.
+
+    That gap was not created by the cancellation. It was the empty stretch at
+    the start of the session before anyone had booked; the cancel merely
+    triggered re-evaluation of a hole that was always there. The rule exists for
+    a doctor finishing early BETWEEN patients, not for "nobody has booked yet",
+    which is not a problem a patient can solve.
+    """
+    policy = await repo.get_gap_policy(session.clinic_id)
+    if not policy.offers_enabled:
+        return
+
     entries = await repo.list_entries(session.id)
     waiting = _ordered_waiting(entries)
     if not waiting:
@@ -566,7 +582,10 @@ async def _gap_check(
     if free_at + GAP_THRESHOLD >= waiting[0].priority_time:
         return  # no meaningful gap
 
-    # 1. auto-pull the earliest ARRIVED patient (they only benefit)
+    # 1. auto-pull the earliest ARRIVED patient (they only benefit).
+    #    Deliberately NOT subject to the horizon: someone already sitting in the
+    #    waiting room can only gain from being called sooner, whatever time they
+    #    originally asked for.
     arrived = [e for e in waiting if e.status == Status.arrived]
     if arrived:
         pull = min(arrived, key=lambda e: e.priority_time)
@@ -577,18 +596,37 @@ async def _gap_check(
         await _recompute_and_shift(repo, session, entries, now, result)
         return
 
-    # 2. else offer the slot to the next 2-3 remote patients (one offer each)
+    # GUARD (3b): only bother REMOTE patients once the doctor is actually
+    # working. Session-start-to-first-booking is not a gap: nobody has been seen
+    # and nobody is in the room, so there is no "finished early" to pass on, and
+    # asking someone to travel does not fill it.
+    #
+    # Scoped to the offer path on purpose. The ARRIVED pull above must still run
+    # from the first minute of a session — a patient sitting in the waiting room
+    # while the doctor is idle is precisely the case rule "doctor never idles"
+    # exists for, and pulling them forward costs them nothing.
+    working = session.consults_done > 0 or any(e.status == Status.in_consult for e in entries)
+    if not working:
+        return
+
+    # 2. else offer the slot to the next 2-3 remote patients (one offer each).
+    #    GUARD (3a): never ask someone to come more than the horizon before the
+    #    time they asked for. Measured against priority_time — the time they
+    #    planned their day around — not eta, which drifts with the queue.
     offered = 0
     for e in waiting:
         if offered >= 3:
             break
-        if e.status == Status.booked and e.gap_offered_at is None:
-            e.gap_offered_at = now
-            await repo.save_entry(e)
-            await repo.add_event(session.clinic_id, session.id, e.id, "gap_offered")
-            result.touched(e)
-            result.notify(NotificationType.gap_offer, e.id)
-            offered += 1
+        if e.status != Status.booked or e.gap_offered_at is not None:
+            continue
+        if e.priority_time - now > policy.pull_forward_max:
+            continue  # too early to be a favour; leave them alone
+        e.gap_offered_at = now
+        await repo.save_entry(e)
+        await repo.add_event(session.clinic_id, session.id, e.id, "gap_offered")
+        result.touched(e)
+        result.notify(NotificationType.gap_offer, e.id)
+        offered += 1
     # 3./4. else a walk-in fills it, else a genuine break — nothing to do
 
 
@@ -602,9 +640,10 @@ async def gap_check(repo: Repo, now: datetime, session_id: UUID) -> EngineResult
 async def accept_gap_offer(repo: Repo, now: datetime, entry_id: UUID) -> EngineResult:
     entry = await repo.get_entry(entry_id)
     session = await repo.lock_session(entry.session_id)
+    policy = await repo.get_gap_policy(session.clinic_id)
     result = EngineResult()
-    # offer valid only within TTL of when it was made
-    if entry.gap_offered_at is None or now > entry.gap_offered_at + GAP_OFFER_TTL:
+    # offer valid only within the clinic's configured TTL of when it was made
+    if entry.gap_offered_at is None or now > entry.gap_offered_at + policy.offer_ttl:
         return result  # expired / no offer -> no-op
     entry.priority_time = now
     entry.gap_offered_at = None

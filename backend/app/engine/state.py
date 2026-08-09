@@ -18,6 +18,9 @@ from app.models import SessionStatus, Source, Status
 # --- policy (CLAUDE.md §3 defaults) -------------------------------------- #
 GAP_THRESHOLD = timedelta(minutes=10)
 GAP_OFFER_TTL = timedelta(minutes=5)
+#: Never ask a remote patient to arrive more than this far before the time they
+#: asked for. See GapPolicy.pull_forward_max.
+GAP_PULL_FORWARD_MAX = timedelta(minutes=30)
 ETA_PING_THRESHOLD_S = 600  # notify only when ETA moves > 10 min
 STOP_ISSUING_BUFFER = timedelta(minutes=30)  # stop offering slots 30 min before close
 
@@ -52,6 +55,30 @@ class Patient:
     wa_number: str
     profile_name: str = "self"
     strikes: int = 0
+
+
+@dc.dataclass(frozen=True, slots=True)
+class GapPolicy:
+    """Per-clinic gap-offer policy, from `clinics.settings` jsonb.
+
+    Defaults match CLAUDE.md § policy defaults; a clinic may override any of
+    them. Passed in rather than read from config so `app/engine/` stays pure
+    and every value is injectable in tests.
+    """
+
+    #: `gap_offers` — master switch for the whole pull-forward feature.
+    offers_enabled: bool = True
+    #: `gap_pull_forward_max_min` — the horizon. Never offer a remote patient a
+    #: slot more than this far before their own requested time.
+    #:
+    #: Measured against `priority_time`, NOT `eta`: the requested time is what
+    #: the patient planned their day around, while the eta is a system artifact
+    #: that drifts as the queue moves. Without this bound, a cancellation at
+    #: 17:30 in a session that opened at 17:00 offered a 19:00 patient a 17:30
+    #: slot — 90 minutes early.
+    pull_forward_max: timedelta = GAP_PULL_FORWARD_MAX
+    #: `gap_offer_expiry_min` — how long an unanswered offer stands.
+    offer_ttl: timedelta = GAP_OFFER_TTL
 
 
 @dc.dataclass(slots=True)

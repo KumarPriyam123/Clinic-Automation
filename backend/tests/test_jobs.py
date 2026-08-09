@@ -159,11 +159,15 @@ def test_scripted_session_each_notification_once():
     assert len(cap.sent) == n
     assert cnt(cap, "expired_rebook", A) == 1
 
-    # --- cancel C opens a gap before the future patient D -> gap_offer ----
+    # --- cancel C: the hole before D is real, but D is too far out to offer -
+    # D asked for 11:00. Offering them the 9:26 slot would ask them to arrive
+    # 94 minutes early, which is the P8.6 defect. The pull-forward horizon
+    # (default 30 min, measured against priority_time) suppresses it.
+    # In-horizon dispatch is covered by test_gap_offer_dispatched_once below.
     _act(
         backend, disp, dt(9, 26), lambda r: engine.cancel(r, dt(9, 26), _entry_id(backend, pats[C]))
     )
-    assert cnt(cap, "gap_offer", D) == 1
+    assert cnt(cap, "gap_offer", D) == 0
 
     # --- close at end_at -> pending (B in-consult, D) expire + rebook -----
     run(sweep_tick(backend, disp, dt(15, 1)))
@@ -172,6 +176,38 @@ def test_scripted_session_each_notification_once():
     assert len(cap.sent) == n
     assert cnt(cap, "expired_rebook", D) == 1  # pending future patient expires
     assert backend.repo.sessions[s.id].status == SessionStatus.closed
+
+
+def test_gap_offer_dispatched_once():
+    """A gap offer inside the horizon reaches WhatsApp exactly once.
+
+    Guards the dispatch path that test_scripted_session_each_notification_once
+    used to cover before the horizon (correctly) suppressed its 94-minute-early
+    offer.
+    """
+    backend = MemJobs()
+    cap = CapSender()
+    disp = NotificationDispatcher(cap, backend.resolver())
+    clinic, s, pats = _mk(backend, dt(9))
+
+    near = _book(backend, clinic, s.id, pats[A], dt(9)).entry  # asap -> seen first
+    soon = _book(backend, clinic, s.id, pats[B], dt(9), req=dt(9, 45)).entry
+
+    # doctor actually works: A arrives, is called in, and finishes at 9:20
+    _act(backend, disp, dt(9), lambda r: engine.mark_arrived(r, dt(9), near.id))
+    _act(backend, disp, dt(9), lambda r: engine.next_patient(r, dt(9), s.id))
+    _act(backend, disp, dt(9, 20), lambda r: engine.next_patient(r, dt(9, 20), s.id))
+
+    # 9:45 is 25 min out — inside the 30 min horizon
+    _act(backend, disp, dt(9, 20), lambda r: engine.gap_check(r, dt(9, 20), s.id))
+    assert cnt(cap, "gap_offer", B) == 1
+    assert soon.gap_offered_at == dt(9, 20)
+
+    # re-running must not send a second offer (one offer per patient per session)
+    n = len(cap.sent)
+    _act(backend, disp, dt(9, 21), lambda r: engine.gap_check(r, dt(9, 21), s.id))
+    assert len(cap.sent) == n
+    assert cnt(cap, "gap_offer", B) == 1
 
 
 def test_stamp_sessions_idempotent():

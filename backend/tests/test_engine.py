@@ -14,7 +14,7 @@ import pytest
 
 from app import engine
 from app.engine.repo import MemRepo
-from app.engine.state import Entry, Patient, SessionState
+from app.engine.state import Entry, GapPolicy, Patient, SessionState
 from app.models import SessionStatus, Source, Status
 
 
@@ -424,3 +424,180 @@ def test_booking_info_ignores_a_move_under_ten_minutes():
     res = do_book(repo, s, p, dt(9), req=dt(9, 55))
     assert res.booking.granted == dt(10)
     assert res.booking.adjust_reason is None
+
+
+# --------------------------------------------------------------------------- #
+# P8.6 — gap-offer horizon + "doctor is actually working" guard
+#
+# Observed defect: an evening session opened 17:00, two patients booked ~19:00
+# and got 19:05 / 19:12. The first cancelled at 17:30 and the second was offered
+# 17:30 — 90 minutes before the time they chose. `17:30` was just `now`.
+#
+# That gap was not created by the cancellation; it was the empty stretch before
+# anyone had booked. The cancel only triggered re-evaluation of a hole that was
+# always there.
+# --------------------------------------------------------------------------- #
+def _gap_offers(res):
+    """gap_offer notifications emitted by an EngineResult."""
+    from app.engine.results import NotificationType
+
+    return [n for n in res.notifications if n.type == NotificationType.gap_offer]
+
+
+def _evening_session(repo):
+    """Opens 17:00, two patients targeting ~19:00 — the reported scenario."""
+    s = open_session(repo, dt(17), avg=420, free=dt(17), end=dt(21))
+    p1, p2 = patient(repo, s.clinic_id, 1), patient(repo, s.clinic_id, 2)
+    a = do_book(repo, s, p1, dt(17), req=dt(19)).entry
+    b = do_book(repo, s, p2, dt(17), req=dt(19, 12)).entry
+    return s, a, b
+
+
+def test_gap_no_offer_before_doctor_has_worked():
+    """The reported bug: cancel at 17:30 must NOT offer 17:30 to a 19:12 patient."""
+    repo = MemRepo()
+    s, a, b = _evening_session(repo)
+    res = run(engine.cancel(repo, dt(17, 30), a.id))
+    assert _gap_offers(res) == []
+    assert b.gap_offered_at is None
+    assert b.priority_time == dt(19, 12)  # untouched
+
+
+def test_gap_offer_inside_horizon_is_emitted():
+    """Doctor finishes at 18:40, next target 19:00 — a 20 min pull-forward."""
+    repo = MemRepo()
+    s = open_session(repo, dt(17), avg=420, free=dt(17), end=dt(21))
+    p1, p2 = patient(repo, s.clinic_id, 1), patient(repo, s.clinic_id, 2)
+    seen = do_book(repo, s, p1, dt(17), req=dt(18)).entry
+    later = do_book(repo, s, p2, dt(17), req=dt(19)).entry
+
+    # doctor actually works: call the first patient in, then finish at 18:40
+    run(engine.mark_arrived(repo, dt(18), seen.id))
+    run(engine.next_patient(repo, dt(18), s.id))
+    run(engine.next_patient(repo, dt(18, 40), s.id))  # consult ends 18:40
+    res = run(engine.gap_check(repo, dt(18, 40), s.id))
+
+    assert s.consults_done == 1
+    offers = _gap_offers(res)
+    assert [n.entry_id for n in offers] == [later.id]
+    assert later.gap_offered_at == dt(18, 40)
+
+
+def test_gap_offer_outside_horizon_is_suppressed():
+    """Same, but the next patient asked for 19:30 — a 50 min pull-forward."""
+    repo = MemRepo()
+    s = open_session(repo, dt(17), avg=420, free=dt(17), end=dt(21))
+    p1, p2 = patient(repo, s.clinic_id, 1), patient(repo, s.clinic_id, 2)
+    seen = do_book(repo, s, p1, dt(17), req=dt(18)).entry
+    later = do_book(repo, s, p2, dt(17), req=dt(19, 30)).entry
+
+    run(engine.mark_arrived(repo, dt(18), seen.id))
+    run(engine.next_patient(repo, dt(18), s.id))
+    run(engine.next_patient(repo, dt(18, 40), s.id))  # consult ends 18:40
+    res = run(engine.gap_check(repo, dt(18, 40), s.id))
+
+    assert s.consults_done == 1
+    assert _gap_offers(res) == []
+    assert later.gap_offered_at is None
+    assert later.priority_time == dt(19, 30)
+
+
+def test_gap_horizon_is_measured_against_priority_time_not_eta():
+    """The horizon keys off what the patient asked for, not the drifting eta.
+
+    Rule 2 clamps eta to `max(clock, priority_time)`, so an eta only ever drifts
+    LATER than the requested time. Here the second waiting patient asked for
+    19:05 (25 min out, inside the 30 min horizon) but their eta has been pushed
+    to ~19:33 by the consult ahead of them (53 min out, outside it). They must
+    still be offered: the requested time is what they planned their day around.
+    """
+    repo = MemRepo()
+    s = open_session(repo, dt(17), avg=1800, free=dt(17), end=dt(22))
+    p1, p2, p3 = (patient(repo, s.clinic_id, i) for i in (1, 2, 3))
+    seen = do_book(repo, s, p1, dt(17), req=dt(18)).entry
+    first = do_book(repo, s, p2, dt(17), req=dt(19)).entry
+    second = do_book(repo, s, p3, dt(17), req=dt(19, 5)).entry
+
+    run(engine.mark_arrived(repo, dt(18), seen.id))
+    run(engine.next_patient(repo, dt(18), s.id))
+    run(engine.next_patient(repo, dt(18, 40), s.id))  # consult ends 18:40
+    res = run(engine.gap_check(repo, dt(18, 40), s.id))
+
+    # eta has drifted well outside the horizon; priority_time has not
+    assert second.eta is not None
+    assert second.eta - dt(18, 40) > timedelta(minutes=30)
+    assert second.priority_time - dt(18, 40) <= timedelta(minutes=30)
+
+    offered = {n.entry_id for n in _gap_offers(res)}
+    assert first.id in offered
+    assert second.id in offered, "horizon was measured against eta, not priority_time"
+
+
+def test_gap_arrived_autopull_ignores_the_horizon():
+    """Someone in the waiting room only benefits; the horizon must not apply."""
+    repo = MemRepo()
+    s = open_session(repo, dt(17), avg=420, free=dt(17), end=dt(21))
+    p1, p2 = patient(repo, s.clinic_id, 1), patient(repo, s.clinic_id, 2)
+    a = do_book(repo, s, p1, dt(17), req=dt(17, 30)).entry
+    far = do_book(repo, s, p2, dt(17), req=dt(20)).entry  # 3h out, way past 30 min
+
+    run(engine.mark_arrived(repo, dt(17, 30), far.id))
+    run(engine.cancel(repo, dt(17, 30), a.id))
+
+    assert far.priority_time == dt(17, 30)  # pulled forward regardless
+
+
+def test_gap_offers_disabled_emits_nothing_on_any_path():
+    repo = MemRepo()
+    repo.gap_policy = GapPolicy(offers_enabled=False)
+
+    # offer path: doctor has worked and the next patient is inside the horizon
+    s = open_session(repo, dt(17), avg=420, free=dt(17), end=dt(21))
+    p1, p2 = patient(repo, s.clinic_id, 1), patient(repo, s.clinic_id, 2)
+    seen = do_book(repo, s, p1, dt(17), req=dt(18)).entry
+    later = do_book(repo, s, p2, dt(17), req=dt(19)).entry
+    run(engine.mark_arrived(repo, dt(18), seen.id))
+    run(engine.next_patient(repo, dt(18), s.id))
+    run(engine.next_patient(repo, dt(18, 40), s.id))  # consult ends 18:40
+    res = run(engine.gap_check(repo, dt(18, 40), s.id))
+    assert _gap_offers(res) == []
+    assert later.gap_offered_at is None
+
+    # auto-pull path: an ARRIVED patient is not pulled forward either
+    repo2 = MemRepo()
+    repo2.gap_policy = GapPolicy(offers_enabled=False)
+    s2 = open_session(repo2, dt(17), avg=420, free=dt(17), end=dt(21))
+    q1, q2 = patient(repo2, s2.clinic_id, 1), patient(repo2, s2.clinic_id, 2)
+    x = do_book(repo2, s2, q1, dt(17), req=dt(17, 30)).entry
+    y = do_book(repo2, s2, q2, dt(17), req=dt(20)).entry
+    run(engine.mark_arrived(repo2, dt(17, 30), y.id))
+    run(engine.cancel(repo2, dt(17, 30), x.id))
+    assert y.priority_time == dt(20)  # untouched
+
+
+def test_gap_horizon_is_per_clinic_configurable():
+    """A clinic may widen the horizon; 50 min is inside a 60 min setting."""
+    repo = MemRepo()
+    repo.gap_policy = GapPolicy(pull_forward_max=timedelta(minutes=60))
+    s = open_session(repo, dt(17), avg=420, free=dt(17), end=dt(21))
+    p1, p2 = patient(repo, s.clinic_id, 1), patient(repo, s.clinic_id, 2)
+    seen = do_book(repo, s, p1, dt(17), req=dt(18)).entry
+    later = do_book(repo, s, p2, dt(17), req=dt(19, 30)).entry
+
+    run(engine.mark_arrived(repo, dt(18), seen.id))
+    run(engine.next_patient(repo, dt(18), s.id))
+    run(engine.next_patient(repo, dt(18, 40), s.id))  # consult ends 18:40
+    res = run(engine.gap_check(repo, dt(18, 40), s.id))
+
+    assert [n.entry_id for n in _gap_offers(res)] == [later.id]
+
+
+def test_gap_offer_ttl_is_per_clinic_configurable():
+    repo = MemRepo()
+    repo.gap_policy = GapPolicy(offer_ttl=timedelta(minutes=15))
+    s = open_session(repo, dt(10))
+    p = patient(repo, s.clinic_id, 1)
+    e = do_book(repo, s, p, dt(10), req=dt(11)).entry
+    e.gap_offered_at = dt(10)
+    run(engine.accept_gap_offer(repo, dt(10, 12), e.id))  # past the 5 min default
+    assert e.priority_time == dt(10, 12)  # accepted under the 15 min setting

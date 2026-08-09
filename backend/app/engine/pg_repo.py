@@ -15,13 +15,21 @@ integration tests that provide DATABASE_URL_TEST.
 
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from uuid import UUID
 
 import asyncpg
 
 from app.engine.results import SessionRef
-from app.engine.state import RELEASED_STATUSES, STOP_ISSUING_BUFFER, Entry, Patient, SessionState
+from app.engine.state import (
+    RELEASED_STATUSES,
+    STOP_ISSUING_BUFFER,
+    Entry,
+    GapPolicy,
+    Patient,
+    SessionState,
+)
 from app.models import SessionStatus, Source, Status
 
 _ACTIVE_SQL = "('booked','arrived','called','in_consult','skipped')"
@@ -270,3 +278,35 @@ class PgRepo:
     async def open_sessions(self) -> list[SessionState]:
         rows = await self._con.fetch("select * from sessions where status = 'open' for update")
         return [_session(r) for r in rows]
+
+    async def get_gap_policy(self, clinic_id: UUID) -> GapPolicy:
+        """Read the per-clinic gap policy out of `clinics.settings` jsonb.
+
+        Every key is optional and falls back to the GapPolicy default, so a
+        clinic row with `settings = '{}'` behaves exactly as before this
+        existed. A malformed value falls back too rather than taking the
+        booking path down.
+        """
+        raw = await self._con.fetchval("select settings from clinics where id = $1", clinic_id)
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                raw = None
+        if not isinstance(raw, dict):
+            return GapPolicy()
+
+        default = GapPolicy()
+
+        def _minutes(key: str, fallback: timedelta) -> timedelta:
+            v = raw.get(key)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+                return fallback
+            return timedelta(minutes=float(v))
+
+        return GapPolicy(
+            # Only an explicit `false` disables; absent means enabled.
+            offers_enabled=raw.get("gap_offers") is not False,
+            pull_forward_max=_minutes("gap_pull_forward_max_min", default.pull_forward_max),
+            offer_ttl=_minutes("gap_offer_expiry_min", default.offer_ttl),
+        )

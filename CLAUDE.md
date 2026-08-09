@@ -106,10 +106,19 @@ Bare `pytest` reports **130 passed, 16 skipped** and prints a green bar with exi
 ## Gap pull-forward (doctor never idles)
 
 After any cancel/expiry, if `doctor_free_at + 10 min < next.priority_time`, in this order:
-1. Auto-pull the earliest **ARRIVED** patient regardless of their target time (they only benefit).
-2. Else offer the slot to the next 2–3 remote patients in queue order — first YES sets their `priority_time = now`; offer expires in 5 min; max one offer per patient per session.
+1. Auto-pull the earliest **ARRIVED** patient regardless of their target time (they only benefit). **Not subject to the horizon below** — someone already in the waiting room can only gain from being called sooner.
+2. Else offer the slot to the next 2–3 remote patients in queue order — first YES sets their `priority_time = now`; offer expires in `gap_offer_expiry_min` (default 5); max one offer per patient per session.
 3. Else a walk-in (`priority_time = now`) naturally fills the hole.
 4. Else it is a genuine break. Do nothing.
+
+**Two guards on the remote offer (step 2). Both are part of the rule.**
+
+- **Pull-forward horizon.** Never offer a remote patient a slot more than `gap_pull_forward_max_min` (default 30) before their own time. Measured against **`priority_time`, not `eta`** — the requested time is what the patient planned their day around; the eta is a system artifact that drifts as the queue moves.
+- **The doctor must actually be working**: at least one completed consult, or someone currently in consult. Session-start-to-first-booking is never a gap.
+
+Why: an evening session opened 17:00, two patients booked ~19:00, the first cancelled at 17:30, and the second was offered **17:30** — 90 minutes before the time they chose. `17:30` was simply `now`. That hole was not created by the cancellation; it was the empty stretch before anyone had booked, and the cancel merely triggered re-evaluation of it. The rule exists for a doctor finishing early *between patients*, which is not a problem a patient can solve by leaving home earlier.
+
+`gap_offers: false` in `clinics.settings` disables the whole pull-forward feature, both the auto-pull and the offer.
 
 ## Anti-abuse (v1)
 
@@ -117,7 +126,9 @@ One **ACTIVE** token per `(clinic, wa_number)` across today's sessions. Up to 3 
 
 ## Policy defaults (per-clinic overrides live in `clinics.settings` jsonb)
 
-grace `max(10m, 2×avg)` · gap threshold 10 min · gap-offer expiry 5 min · ETA-ping threshold 10 min · booking window 2 days · stop issuing tokens 30 min before close or at cap · family profiles ≤ 3 · default `avg_consult_s` seed 420.
+grace `max(10m, 2×avg)` · gap threshold 10 min · `gap_offer_expiry_min` 5 · `gap_pull_forward_max_min` 30 · `gap_offers` true · ETA-ping threshold 10 min · booking window 2 days · stop issuing tokens 30 min before close or at cap · family profiles ≤ 3 · default `avg_consult_s` seed 420.
+
+Engine-visible policy is read through `repo.get_gap_policy(clinic_id)` into a `GapPolicy` — never from config inside `app/engine/`, so purity holds and every value is injectable in tests.
 
 ## Data model (summary — full DDL in supabase/migrations/)
 

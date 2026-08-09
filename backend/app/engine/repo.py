@@ -18,6 +18,7 @@ from app.engine.state import (
     RELEASED_STATUSES,
     STOP_ISSUING_BUFFER,
     Entry,
+    GapPolicy,
     Patient,
     SessionState,
 )
@@ -49,6 +50,10 @@ class Repo(Protocol):
     ) -> list[SessionRef]: ...
     async def open_sessions(self) -> list[SessionState]: ...
 
+    #: Per-clinic gap policy from `clinics.settings`. Read through the repo so
+    #: `app/engine/` never touches config or the DB directly.
+    async def get_gap_policy(self, clinic_id: UUID) -> GapPolicy: ...
+
 
 class MemRepo:
     """In-memory Repo for tests. Objects are shared by reference, so `save_*`
@@ -59,6 +64,8 @@ class MemRepo:
         self.entries: dict[UUID, Entry] = {}
         self.patients: dict[UUID, Patient] = {}
         self.events: list[dict] = []
+        #: Overridable per-clinic gap policy; tests set this directly.
+        self.gap_policy = GapPolicy()
 
     # --- seed helpers (test-only convenience) ---------------------------- #
     def add_session(self, session: SessionState) -> SessionState:
@@ -162,3 +169,6 @@ class MemRepo:
 
     async def open_sessions(self) -> list[SessionState]:
         return [s for s in self.sessions.values() if s.status == SessionStatus.open]
+
+    async def get_gap_policy(self, clinic_id: UUID) -> GapPolicy:
+        return self.gap_policy
